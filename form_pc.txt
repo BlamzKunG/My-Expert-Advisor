@@ -1,1 +1,12 @@
-
+MACD_GRID.mq5			
+Trade.mqh			
+Object.mqh			
+StdLibErr.mqh			
+OrderInfo.mqh			
+HistoryOrderInfo.mqh			
+PositionInfo.mqh			
+DealInfo.mqh			
+possible loss of data due to type conversion from 'long' to 'double'	MACD_GRID.mq5	208	21
+'POSITION_COMMISSION' is deprecated	MACD_GRID.mq5	342	118
+code generated			0
+0 errors, 2 warnings, 1548 msec elapsed, cpu='X64 Regular'			2
