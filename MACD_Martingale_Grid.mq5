@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, BlamzKunG"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 //--- Include
@@ -14,31 +14,46 @@
 
 //--- Input Parameters
 input group "MACD Settings"
-input int      InpFastEMA = 12;      // Fast EMA Period
-input int      InpSlowEMA = 26;      // Slow EMA Period
-input int      InpSignalSMA = 9;     // Signal SMA Period
+input int               InpFastEMA = 12;      // Fast EMA Period
+input int               InpSlowEMA = 26;      // Slow EMA Period
+input int               InpSignalSMA = 9;     // Signal SMA Period
 
-input group "Grid Settings"
-input double   InpInitialLot = 0.01; // Initial Lot Size
-input int      InpGridStepPips = 100;// Grid Step in Pips
-input double   InpLotMultiplier = 1.5;// Lot Multiplier
-input int      InpMaxGridLevels = 10;// Max Grid Levels
+input group "Trend Filter (Higher TF)"
+input bool              InpUseTrendFilter = true; // Use EMA Trend Filter
+input ENUM_TIMEFRAMES   InpTrendTF = PERIOD_H4;   // Trend Timeframe
+input int               InpTrendEMA = 200;        // Trend EMA Period
+
+input group "Dynamic Grid (ATR)"
+input bool              InpUseDynamicGrid = true; // Use ATR for Grid Step
+input int               InpATRPeriod = 14;        // ATR Period
+input double            InpATRMultiplier = 2.0;   // ATR Multiplier for Step
+input int               InpMinGridStepPips = 50;  // Minimum Grid Step (Pips)
+
+input group "Standard Grid Settings"
+input double            InpInitialLot = 0.01; // Initial Lot Size
+input int               InpGridStepPips = 100;// Fixed Grid Step (if ATR disabled)
+input double            InpLotMultiplier = 1.5;// Lot Multiplier
+input int               InpMaxGridLevels = 10;// Max Grid Levels
 
 input group "Risk Management"
-input double   InpBasketTPUSD = 10.0;// Basket Take Profit (USD)
-input double   InpEquityStopPercent = 20.0; // Equity Stop Percent
-input int      InpMaxSpread = 30;    // Max Spread in Pips (0 to disable)
+input double            InpBasketTPUSD = 10.0;// Basket Take Profit (USD)
+input double            InpEquityStopPercent = 20.0; // Equity Stop Percent
+input int               InpMaxSpread = 30;    // Max Spread in Pips (0 to disable)
 
 input group "Advanced Settings"
-input int      InpMagicNumber = 123456; // Magic Number
-input int      InpTrailingStop = 50;   // Trailing Stop in Pips (0 to disable)
+input int               InpMagicNumber = 123456; // Magic Number
+input int               InpTrailingStop = 50;   // Trailing Stop in Pips (0 to disable)
 
 //--- Global Variables
 CTrade         m_trade;              // Trading class
 CPositionInfo  m_position;           // Position info class
 int            m_handle_macd;        // MACD handle
+int            m_handle_ema_trend;   // EMA Trend handle
+int            m_handle_atr;         // ATR handle
 double         m_macd_main[];        // MACD main buffer
 double         m_macd_signal[];      // MACD signal buffer
+double         m_ema_trend[];        // EMA trend buffer
+double         m_atr_buffer[];       // ATR buffer
 int            m_pips_multiplier;    // Multiplier for 3/5 digits
 
 enum ENUM_TREND_STATE
@@ -64,9 +79,33 @@ int OnInit()
       return(INIT_FAILED);
    }
    
+   //--- Initialize EMA Trend handle
+   if(InpUseTrendFilter)
+   {
+      m_handle_ema_trend = iMA(_Symbol, InpTrendTF, InpTrendEMA, 0, MODE_EMA, PRICE_CLOSE);
+      if(m_handle_ema_trend == INVALID_HANDLE)
+      {
+         Print("Failed to create EMA Trend handle");
+         return(INIT_FAILED);
+      }
+   }
+
+   //--- Initialize ATR handle
+   if(InpUseDynamicGrid)
+   {
+      m_handle_atr = iATR(_Symbol, _Period, InpATRPeriod);
+      if(m_handle_atr == INVALID_HANDLE)
+      {
+         Print("Failed to create ATR handle");
+         return(INIT_FAILED);
+      }
+   }
+
    //--- Set arrays as series
    ArraySetAsSeries(m_macd_main, true);
    ArraySetAsSeries(m_macd_signal, true);
+   ArraySetAsSeries(m_ema_trend, true);
+   ArraySetAsSeries(m_atr_buffer, true);
    
    //--- Set trade magic number
    m_trade.SetExpertMagicNumber(InpMagicNumber);
@@ -80,6 +119,8 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    IndicatorRelease(m_handle_macd);
+   if(InpUseTrendFilter) IndicatorRelease(m_handle_ema_trend);
+   if(InpUseDynamicGrid) IndicatorRelease(m_handle_atr);
 }
 
 //+------------------------------------------------------------------+
@@ -91,8 +132,8 @@ void OnTick()
    if(CheckEquityProtection())
       return;
 
-   // 2. Update MACD Values
-   if(!UpdateMACD())
+   // 2. Update Indicator Values
+   if(!UpdateIndicators())
       return;
 
    ENUM_TREND_STATE currentTrend = GetMACDState();
@@ -133,15 +174,28 @@ bool CheckEquityProtection()
 }
 
 //+------------------------------------------------------------------+
-//| Update MACD Values                                               |
+//| Update Indicator Values                                          |
 //+------------------------------------------------------------------+
-bool UpdateMACD()
+bool UpdateIndicators()
 {
    if(CopyBuffer(m_handle_macd, MAIN_LINE, 0, 2, m_macd_main) < 2 ||
       CopyBuffer(m_handle_macd, SIGNAL_LINE, 0, 2, m_macd_signal) < 2)
    {
       return false;
    }
+
+   if(InpUseTrendFilter)
+   {
+      if(CopyBuffer(m_handle_ema_trend, 0, 0, 1, m_ema_trend) < 1)
+         return false;
+   }
+
+   if(InpUseDynamicGrid)
+   {
+      if(CopyBuffer(m_handle_atr, 0, 0, 1, m_atr_buffer) < 1)
+         return false;
+   }
+
    return true;
 }
 
@@ -153,9 +207,10 @@ ENUM_TREND_STATE GetMACDState()
    double main = m_macd_main[0];
    double signal = m_macd_signal[0];
 
-   if(main > 0 && main > signal)
+   // Broadened logic to ensure more frequent entries while maintaining direction
+   if(main > signal)
       return TREND_UP;
-   if(main < 0 && main < signal)
+   if(main < signal)
       return TREND_DOWN;
 
    return TREND_NONE;
@@ -209,9 +264,36 @@ void HandleTrading(ENUM_TREND_STATE trend)
       if(spread > InpMaxSpread) return;
    }
 
+   //--- Trend Filter (EMA 200 on Higher TF)
+   bool allowBuy = true;
+   bool allowSell = true;
+   
+   if(InpUseTrendFilter)
+   {
+      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double emaVal = m_ema_trend[0];
+      
+      if(currentPrice < emaVal) allowBuy = false;
+      if(currentPrice > emaVal) allowSell = false;
+   }
+
+   //--- Calculate Grid Step (Dynamic or Fixed)
+   double stepPrice;
+   if(InpUseDynamicGrid)
+   {
+      double atr = m_atr_buffer[0];
+      double dynamicStep = atr * InpATRMultiplier;
+      double minStep = InpMinGridStepPips * _Point * m_pips_multiplier;
+      stepPrice = MathMax(dynamicStep, minStep);
+   }
+   else
+   {
+      stepPrice = InpGridStepPips * _Point * m_pips_multiplier;
+   }
+
    //--- BUY LOGIC
    int buyCount = CountPositions(POSITION_TYPE_BUY);
-   if(trend == TREND_UP)
+   if(trend == TREND_UP && allowBuy)
    {
       if(buyCount == 0)
       {
@@ -221,9 +303,8 @@ void HandleTrading(ENUM_TREND_STATE trend)
       {
          double lastPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         double step = InpGridStepPips * _Point * m_pips_multiplier;
 
-         if(currentPrice <= lastPrice - step)
+         if(currentPrice <= lastPrice - stepPrice)
          {
             double nextLot = GetLastPositionLot(POSITION_TYPE_BUY) * InpLotMultiplier;
             OpenPosition(POSITION_TYPE_BUY, nextLot);
@@ -233,7 +314,7 @@ void HandleTrading(ENUM_TREND_STATE trend)
 
    //--- SELL LOGIC
    int sellCount = CountPositions(POSITION_TYPE_SELL);
-   if(trend == TREND_DOWN)
+   if(trend == TREND_DOWN && allowSell)
    {
       if(sellCount == 0)
       {
@@ -243,9 +324,8 @@ void HandleTrading(ENUM_TREND_STATE trend)
       {
          double lastPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double step = InpGridStepPips * _Point * m_pips_multiplier;
 
-         if(currentPrice >= lastPrice + step)
+         if(currentPrice >= lastPrice + stepPrice)
          {
             double nextLot = GetLastPositionLot(POSITION_TYPE_SELL) * InpLotMultiplier;
             OpenPosition(POSITION_TYPE_SELL, nextLot);

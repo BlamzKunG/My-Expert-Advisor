@@ -14,6 +14,11 @@ A MetaTrader 5 Expert Advisor that uses MACD for trend identification combined w
 - **Magic Number Support**: (New in v1.01) Allows running multiple instances on the same symbol.
 
 ### Version History
+- **v1.02**: 
+    - Added EMA Trend Filter on higher timeframes (e.g., H4 EMA 200).
+    - Added Dynamic Grid Step based on ATR.
+    - Improved MACD entry logic for better responsiveness.
+    - Optimized indicator handling and memory management.
 - **v1.01**: 
     - Added Trailing Stop feature.
     - Added Max Spread filter.
