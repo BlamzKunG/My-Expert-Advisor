@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, BlamzKunG"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 //--- Include
@@ -27,6 +27,11 @@ input int      InpMaxGridLevels = 10;// Max Grid Levels
 input group "Risk Management"
 input double   InpBasketTPUSD = 10.0;// Basket Take Profit (USD)
 input double   InpEquityStopPercent = 20.0; // Equity Stop Percent
+input int      InpMaxSpread = 30;    // Max Spread in Pips (0 to disable)
+
+input group "Advanced Settings"
+input int      InpMagicNumber = 123456; // Magic Number
+input int      InpTrailingStop = 50;   // Trailing Stop in Pips (0 to disable)
 
 //--- Global Variables
 CTrade         m_trade;              // Trading class
@@ -34,6 +39,7 @@ CPositionInfo  m_position;           // Position info class
 int            m_handle_macd;        // MACD handle
 double         m_macd_main[];        // MACD main buffer
 double         m_macd_signal[];      // MACD signal buffer
+int            m_pips_multiplier;    // Multiplier for 3/5 digits
 
 enum ENUM_TREND_STATE
 {
@@ -47,6 +53,9 @@ enum ENUM_TREND_STATE
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   //--- Detect pips multiplier
+   m_pips_multiplier = (_Digits == 3 || _Digits == 5) ? 10 : 1;
+
    //--- Initialize MACD handle
    m_handle_macd = iMACD(_Symbol, _Period, InpFastEMA, InpSlowEMA, InpSignalSMA, PRICE_CLOSE);
    if(m_handle_macd == INVALID_HANDLE)
@@ -60,7 +69,7 @@ int OnInit()
    ArraySetAsSeries(m_macd_signal, true);
    
    //--- Set trade magic number
-   m_trade.SetExpertMagicNumber(123456);
+   m_trade.SetExpertMagicNumber(InpMagicNumber);
    
    return(INIT_SUCCEEDED);
 }
@@ -96,6 +105,10 @@ void OnTick()
 
    // 5. Initial Entry & Grid Expansion
    HandleTrading(currentTrend);
+
+   // 6. Trailing Stop
+   if(InpTrailingStop > 0)
+      HandleTrailingStop();
 }
 
 //+------------------------------------------------------------------+
@@ -105,11 +118,13 @@ bool CheckEquityProtection()
 {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance <= 0) return false;
+   
    double drawdown = (balance - equity) / balance * 100.0;
 
    if(drawdown >= InpEquityStopPercent)
    {
-      Print("Equity Protection Triggered! Drawdown: ", drawdown, "%");
+      Print("Equity Protection Triggered! Drawdown: ", DoubleToString(drawdown, 2), "%");
       CloseAllPositions(POSITION_TYPE_BUY);
       CloseAllPositions(POSITION_TYPE_SELL);
       return true;
@@ -187,6 +202,13 @@ void HandleTrendReversal(ENUM_TREND_STATE trend)
 //+------------------------------------------------------------------+
 void HandleTrading(ENUM_TREND_STATE trend)
 {
+   //--- Max Spread Filter
+   if(InpMaxSpread > 0)
+   {
+      double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+      if(spread > InpMaxSpread) return;
+   }
+
    //--- BUY LOGIC
    int buyCount = CountPositions(POSITION_TYPE_BUY);
    if(trend == TREND_UP)
@@ -199,7 +221,7 @@ void HandleTrading(ENUM_TREND_STATE trend)
       {
          double lastPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         double step = InpGridStepPips * _Point * 10; // Convert pips to price (assuming 5-digit)
+         double step = InpGridStepPips * _Point * m_pips_multiplier;
 
          if(currentPrice <= lastPrice - step)
          {
@@ -221,12 +243,60 @@ void HandleTrading(ENUM_TREND_STATE trend)
       {
          double lastPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double step = InpGridStepPips * _Point * 10;
+         double step = InpGridStepPips * _Point * m_pips_multiplier;
 
          if(currentPrice >= lastPrice + step)
          {
             double nextLot = GetLastPositionLot(POSITION_TYPE_SELL) * InpLotMultiplier;
             OpenPosition(POSITION_TYPE_SELL, nextLot);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Handle Trailing Stop for All Positions                           |
+//+------------------------------------------------------------------+
+void HandleTrailingStop()
+{
+   double trailingStopVal = InpTrailingStop * _Point * m_pips_multiplier;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            double currentSL = PositionGetDouble(POSITION_SL);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+            if(type == POSITION_TYPE_BUY)
+            {
+               double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+               if(bid - openPrice > trailingStopVal)
+               {
+                  double newSL = bid - trailingStopVal;
+                  if(newSL > currentSL || currentSL == 0)
+                  {
+                     m_trade.PositionModify(ticket, NormalizeDouble(newSL, _Digits), PositionGetDouble(POSITION_TP));
+                  }
+               }
+            }
+            else if(type == POSITION_TYPE_SELL)
+            {
+               double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               if(openPrice - ask > trailingStopVal)
+               {
+                  double newSL = ask + trailingStopVal;
+                  if(newSL < currentSL || currentSL == 0)
+                  {
+                     m_trade.PositionModify(ticket, NormalizeDouble(newSL, _Digits), PositionGetDouble(POSITION_TP));
+                  }
+               }
+            }
          }
       }
    }
@@ -245,7 +315,7 @@ int CountPositions(ENUM_POSITION_TYPE type)
       {
          if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
             PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == 123456)
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             count++;
          }
@@ -267,7 +337,7 @@ double CalculateBasketProfit(ENUM_POSITION_TYPE type)
       {
          if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
             PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == 123456)
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             totalProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
          }
@@ -288,7 +358,7 @@ void CloseAllPositions(ENUM_POSITION_TYPE type)
       {
          if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
             PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == 123456)
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             m_trade.PositionClose(ticket);
          }
@@ -310,7 +380,7 @@ double GetLastPositionPrice(ENUM_POSITION_TYPE type)
       {
          if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
             PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == 123456)
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
             if(posTime > lastTime)
@@ -338,7 +408,7 @@ double GetLastPositionLot(ENUM_POSITION_TYPE type)
       {
          if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
             PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == 123456)
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
             if(posTime > lastTime)
