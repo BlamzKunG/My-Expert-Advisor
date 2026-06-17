@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, BlamzKunG"
 #property link      "https://github.com/Blamz"
-#property version   "2.00"
+#property version   "2.10"
 #property description "Advanced ICT & MMXM Automated Framework based on TTrades"
 
 #include <Trade\Trade.mqh>
@@ -39,6 +39,7 @@ input int                     Inp_SL_Buffer  = 20;           // Stop Loss Buffer
 
 //--- Global State Variables
 int currentBias = 0; // 1 = Long, -1 = Short, 0 = Neutral
+datetime lastEntryBarTime = 0; // Prevent multiple trades per bar
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -46,6 +47,11 @@ int currentBias = 0; // 1 = Long, -1 = Short, 0 = Neutral
 int OnInit() {
     Print("TTrades ICT Master initialized. HTF: ", EnumToString(Inp_HTF_Bias), ", LTF: ", EnumToString(Inp_LTF_Entry));
     trade.SetExpertMagicNumber(20261337);
+    
+    // Debug Broker Info
+    double stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+    Print("DEBUG: Broker Stop Level for ", Symbol(), " is ", stopLevel, " points.");
+    
     return(INIT_SUCCEEDED);
 }
 
@@ -53,7 +59,7 @@ int OnInit() {
 //| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
-    Print("TTrades ICT Master deinitialized.");
+    Print("TTrades ICT Master deinitialized. Reason Code: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -66,20 +72,26 @@ void OnTick() {
     // 2. Daily Profile Check (Seek & Destroy Filter)
     if(Inp_Filter_SeekDestroy && IsSeekAndDestroyProfile()) return;
     
-    // 3. Determine Bias (Simple Placeholder logic for HTF Trend)
+    // 3. One Trade Per Bar Logic (Prevents Order Spamming)
+    datetime currentBarTime = iTime(Symbol(), Inp_LTF_Entry, 0);
+    if(currentBarTime == lastEntryBarTime) return; 
+    
+    // 4. Determine Bias
     currentBias = DetermineBias();
     if(currentBias == 0) return;
     
-    // 4. Look for Entries if no open positions
+    // 5. Look for Entries if no open positions
     if(PositionsTotal() == 0) {
         if(currentBias == 1) {
             if(CheckLongEntry()) {
                 ExecuteTrade(ORDER_TYPE_BUY);
+                lastEntryBarTime = currentBarTime; // Lock this bar after execution
             }
         }
         else if(currentBias == -1) {
             if(CheckShortEntry()) {
                 ExecuteTrade(ORDER_TYPE_SELL);
+                lastEntryBarTime = currentBarTime; // Lock this bar after execution
             }
         }
     }
@@ -102,9 +114,7 @@ bool IsInKillzone() {
 //| MODULE: Seek & Destroy Filter                                    |
 //+------------------------------------------------------------------+
 bool IsSeekAndDestroyProfile() {
-    // Advanced Logic: Check if price has swept both the Asian High and Low
-    // For this structural build, we assume it's safe if not explicitly triggered.
-    // In production, this requires mapping the 18:00-00:00 range.
+    // Advanced Logic Placeholder
     return false; 
 }
 
@@ -112,13 +122,14 @@ bool IsSeekAndDestroyProfile() {
 //| MODULE: HTF Bias                                                 |
 //+------------------------------------------------------------------+
 int DetermineBias() {
-    // Simplified HTF Bias: Is current price above or below HTF moving average / structure?
     double htfClose1 = iClose(Symbol(), Inp_HTF_Bias, 1);
     double htfClose2 = iClose(Symbol(), Inp_HTF_Bias, 2);
     
-    if(htfClose1 > htfClose2) return 1;  // Bullish
-    if(htfClose1 < htfClose2) return -1; // Bearish
-    return 0;
+    int bias = 0;
+    if(htfClose1 > htfClose2) bias = 1;
+    else if(htfClose1 < htfClose2) bias = -1;
+    
+    return bias;
 }
 
 //+------------------------------------------------------------------+
@@ -126,19 +137,14 @@ int DetermineBias() {
 //+------------------------------------------------------------------+
 bool CheckLongEntry() {
     bool validEntry = false;
+    string signalType = "";
+
+    if(Inp_Use_Unicorn && CheckUnicornLong()) { validEntry = true; signalType = "Unicorn"; }
+    if(!validEntry && Inp_Use_IFVG && CheckIFVGLong()) { validEntry = true; signalType = "IFVG"; }
+    if(!validEntry && Inp_Use_C2C3 && CheckC2C3_Long()) { validEntry = true; signalType = "C2/C3"; }
+    if(!validEntry && Inp_Use_CISD && CheckCISD_Long()) { validEntry = true; signalType = "CISD"; }
     
-    // Check Unicorn Model (Breaker + FVG)
-    if(Inp_Use_Unicorn && CheckUnicornLong()) validEntry = true;
-    
-    // Check Inversion FVG
-    if(!validEntry && Inp_Use_IFVG && CheckIFVGLong()) validEntry = true;
-    
-    // Check C2/C3 Confirmation
-    if(!validEntry && Inp_Use_C2C3 && CheckC2C3_Long()) validEntry = true;
-    
-    // Check Intracandle CISD
-    if(!validEntry && Inp_Use_CISD && CheckCISD_Long()) validEntry = true;
-    
+    if(validEntry) Print("SIGNAL: Bullish Entry Found! Type: ", signalType, " at ", TimeToString(TimeCurrent()));
     return validEntry;
 }
 
@@ -146,9 +152,12 @@ bool CheckLongEntry() {
 //| MODULE: Short Entry Logic (Routing)                              |
 //+------------------------------------------------------------------+
 bool CheckShortEntry() {
-    // Mirrored logic of CheckLongEntry()
     bool validEntry = false;
-    if(Inp_Use_C2C3 && CheckC2C3_Short()) validEntry = true;
+    string signalType = "";
+
+    if(Inp_Use_C2C3 && CheckC2C3_Short()) { validEntry = true; signalType = "C2/C3"; }
+    
+    if(validEntry) Print("SIGNAL: Bearish Entry Found! Type: ", signalType, " at ", TimeToString(TimeCurrent()));
     return validEntry;
 }
 
@@ -156,20 +165,14 @@ bool CheckShortEntry() {
 //| LOGIC: C2 / C3 Closures (Long)                                   |
 //+------------------------------------------------------------------+
 bool CheckC2C3_Long() {
-    // C1 = Lowest point candle. C2 must close ABOVE C1 High.
     double c1Low = iLow(Symbol(), Inp_LTF_Entry, 3);
     double c1High = iHigh(Symbol(), Inp_LTF_Entry, 3);
-    
     double c2Close = iClose(Symbol(), Inp_LTF_Entry, 2);
     double c2High = iHigh(Symbol(), Inp_LTF_Entry, 2);
-    
     double c3Close = iClose(Symbol(), Inp_LTF_Entry, 1);
     
-    // Is C1 the lowest of the recent swing?
     if(c1Low <= iLow(Symbol(), Inp_LTF_Entry, 4) && c1Low <= iLow(Symbol(), Inp_LTF_Entry, 5)) {
-        // C2 Closure Success
         if(c2Close > c1High) return true;
-        // C3 Closure Success (C2 failed, but C3 closed above C2's high)
         if(c2Close <= c1High && c3Close > c2High) return true;
     }
     return false;
@@ -205,30 +208,19 @@ void DrawDebugBox(string name, datetime time1, double price1, datetime time2, do
 //| LOGIC: Inversion FVG (Algorithmic Scan)                          |
 //+------------------------------------------------------------------+
 bool CheckIFVGLong() {
-    // Scan the last 10-20 candles on the Entry Timeframe for a Bearish FVG
     for(int i = 5; i <= 20; i++) {
         double high3 = iHigh(Symbol(), Inp_LTF_Entry, i);
         double low1  = iLow(Symbol(), Inp_LTF_Entry, i-2);
         
-        // Is it a Bearish FVG? (Gap between Candle 1 Low and Candle 3 High)
         if(low1 > high3) {
             double fvgTop = low1;
             double fvgBot = high3;
-            
-            // Check if it has been INVERTED (Price closed above the Bearish FVG Top)
             double recentClose = iClose(Symbol(), Inp_LTF_Entry, 2);
             if(recentClose > fvgTop) {
-                
-                // Draw Debug Box (Cyan for Inverted Bearish FVG -> Bullish Support)
                 DrawDebugBox("IFVG_"+IntegerToString(i), iTime(Symbol(), Inp_LTF_Entry, i), fvgTop, iTime(Symbol(), Inp_LTF_Entry, 0), fvgBot, clrDarkCyan);
-                
-                // Trigger: Current candle retraces into the top of the IFVG and closes above it
                 double currentLow = iLow(Symbol(), Inp_LTF_Entry, 1);
                 double currentClose = iClose(Symbol(), Inp_LTF_Entry, 1);
-                
-                if(currentLow <= fvgTop && currentClose > fvgTop) {
-                    return true;
-                }
+                if(currentLow <= fvgTop && currentClose > fvgTop) return true;
             }
         }
     }
@@ -239,7 +231,6 @@ bool CheckIFVGLong() {
 //| LOGIC: Intracandle CISD (Algorithmic Scan)                       |
 //+------------------------------------------------------------------+
 bool CheckCISD_Long() {
-    // Find the last consecutive down-close candle (Bearish Order Block logic)
     int lastBearishCandleIdx = -1;
     for(int i = 2; i <= 10; i++) {
         if(iClose(Symbol(), Inp_LTF_Entry, i) < iOpen(Symbol(), Inp_LTF_Entry, i)) {
@@ -247,16 +238,10 @@ bool CheckCISD_Long() {
             break;
         }
     }
-    
     if(lastBearishCandleIdx != -1) {
-        double obOpen = iOpen(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx);
         double obHigh = iHigh(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx);
-        
-        // CISD Trigger: Current closed candle closes ABOVE the body/high of the down candle
         double currentClose = iClose(Symbol(), Inp_LTF_Entry, 1);
-        
         if(currentClose > obHigh) {
-            // Draw Debug Box (Green for Bullish CISD Shift)
             DrawDebugBox("CISD_"+IntegerToString(lastBearishCandleIdx), iTime(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx), obHigh, iTime(Symbol(), Inp_LTF_Entry, 0), iLow(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx), clrDarkGreen);
             return true; 
         }
@@ -264,21 +249,48 @@ bool CheckCISD_Long() {
     return false;
 }
 
-bool CheckUnicornLong() { return false; /* Unicorn requires deeper Breaker mapping, keeping disabled for now */ }
+bool CheckUnicornLong() { return false; }
 
 //+------------------------------------------------------------------+
-//| EXECUTION                                                        |
+//| EXECUTION (With Robust Validation & Logging)                     |
 //+------------------------------------------------------------------+
 void ExecuteTrade(ENUM_ORDER_TYPE type) {
-    double price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+    double price = (type == ORDER_TYPE_BUY) ? ask : bid;
     double sl = 0.0;
     
-    // Basic structural Stop Loss
+    // 1. Calculate Structural SL
     if(type == ORDER_TYPE_BUY) {
         sl = iLow(Symbol(), Inp_LTF_Entry, 1) - (Inp_SL_Buffer * Point());
     } else {
         sl = iHigh(Symbol(), Inp_LTF_Entry, 1) + (Inp_SL_Buffer * Point());
     }
     
-    trade.PositionOpen(Symbol(), type, Inp_LotSize, price, sl, 0.0, "TTrades ICT Master");
+    // 2. Validate SL against Broker's StopLevel
+    double stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * Point();
+    double minSlDistance = stopLevel + SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
+    
+    if(type == ORDER_TYPE_BUY) {
+        if(price - sl < minSlDistance) {
+            sl = price - minSlDistance;
+            Print("DEBUG: SL too tight (StopLevel/Spread). Adjusted Buy SL to: ", sl);
+        }
+    } else {
+        if(sl - price < minSlDistance) {
+            sl = price + minSlDistance;
+            Print("DEBUG: SL too tight (StopLevel/Spread). Adjusted Sell SL to: ", sl);
+        }
+    }
+
+    // 3. Final Execution & Detailed Result Logging
+    Print("ATTEMPT: Sending ", EnumToString(type), " Order. Price: ", price, " SL: ", sl, " Lot: ", Inp_LotSize);
+    
+    ResetLastError();
+    if(trade.PositionOpen(Symbol(), type, Inp_LotSize, price, sl, 0.0, "TTrades ICT Master")) {
+        Print("SUCCESS: Order executed. Ticket: ", trade.ResultDeal());
+    } else {
+        Print("ERROR: Execution Failed! Code: ", GetLastError(), " - ", trade.ResultRetcodeDescription());
+        Print("DEBUG INFO: Broker StopLevel: ", stopLevel, " Current Spread: ", SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
+    }
 }
