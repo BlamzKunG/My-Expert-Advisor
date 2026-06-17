@@ -5,292 +5,264 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, BlamzKunG"
 #property link      "https://github.com/Blamz"
-#property version   "2.10"
-#property description "Advanced ICT & MMXM Automated Framework based on TTrades"
+#property version   "2.50"
+#property description "Advanced ICT Framework with Hybrid Profit Management"
 
 #include <Trade\Trade.mqh>
 
 CTrade trade;
 
 //+------------------------------------------------------------------+
-//| INPUT PARAMETERS (Extreme Flexibility)                           |
+//| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
 sinput string                 sep1 = "--- Timeframe Settings ---";
 input ENUM_TIMEFRAMES         Inp_HTF_Bias   = PERIOD_D1;  // Bias & Daily Profile TF
-input ENUM_TIMEFRAMES         Inp_ITF_Curve  = PERIOD_H1;  // MMXM Curve & POI TF
 input ENUM_TIMEFRAMES         Inp_LTF_Entry  = PERIOD_M5;  // Entry Execution TF
 
 sinput string                 sep2 = "--- Killzone Settings (Broker Time) ---";
-input bool                    Inp_UseKillzones = true;     // Enable Time Filtering
-input string                  Inp_KZ_Start   = "08:30";    // Session Start
-input string                  Inp_KZ_End     = "11:00";    // Session End
+input bool                    Inp_UseKillzones = true;
+input string                  Inp_KZ_Start   = "08:30";
+input string                  Inp_KZ_End     = "11:00";
 
-sinput string                 sep3 = "--- Strategy & Entry Toggles ---";
-input bool                    Inp_Use_Unicorn = true;      // Enable Unicorn Model (Breaker + FVG)
-input bool                    Inp_Use_IFVG    = true;      // Enable Inversion FVG
-input bool                    Inp_Use_C2C3    = true;      // Enable Candle 2 / Candle 3 Closures
-input bool                    Inp_Use_CISD    = true;      // Enable Intracandle CISD
+sinput string                 sep3 = "--- Strategy Toggles ---";
+input bool                    Inp_Use_IFVG    = true;
+input bool                    Inp_Use_C2C3    = true;
+input bool                    Inp_Use_CISD    = true;
 
-sinput string                 sep4 = "--- Risk & Filters ---";
-input bool                    Inp_Filter_SeekDestroy = true; // Avoid trading in Seek & Destroy profile
-input bool                    Inp_Filter_SMT = false;        // Require SMT Divergence to enter
-input double                  Inp_LotSize    = 0.1;          // Fixed Lot Size
-input int                     Inp_SL_Buffer  = 20;           // Stop Loss Buffer (Points)
+sinput string                 sep4 = "--- Risk & Profit Management ---";
+input double                  Inp_LotSize    = 0.1;
+input int                     Inp_SL_Buffer  = 20;   // Buffer in Points
+input bool                    Inp_Use_RR     = true; // Use Fixed RR Target
+input double                  Inp_TargetRR   = 2.0;  // Target RR (e.g. 2.0 = 1:2)
 
-//--- Global State Variables
-int currentBias = 0; // 1 = Long, -1 = Short, 0 = Neutral
-datetime lastEntryBarTime = 0; // Prevent multiple trades per bar
+sinput string                 sep5 = "--- Advanced Exit Systems (Hybrid) ---";
+input bool                    Inp_Use_BE       = true;  // Enable Break-Even
+input double                  Inp_BE_TriggerRR = 1.0;   // Move to BE after reaching 1:1 RR
+input bool                    Inp_Use_Trail    = false; // Standard Trailing Stop
+input int                     Inp_TrailPoints  = 300;   // Distance for Standard Trail
+input bool                    Inp_Use_CandleTrail = true; // ICT Candle-based Trailing
+
+//--- Global State
+datetime lastEntryBarTime = 0;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                   |
+//| Initialization                                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
-    Print("TTrades ICT Master initialized. HTF: ", EnumToString(Inp_HTF_Bias), ", LTF: ", EnumToString(Inp_LTF_Entry));
+    Print("TTrades ICT Master v2.50 Initialized.");
     trade.SetExpertMagicNumber(20261337);
-    
-    // Debug Broker Info
-    double stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-    Print("DEBUG: Broker Stop Level for ", Symbol(), " is ", stopLevel, " points.");
-    
     return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
-    Print("TTrades ICT Master deinitialized. Reason Code: ", reason);
+    Print("EA Deinitialized. Code: ", reason);
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                             |
+//| Tick Processing                                                  |
 //+------------------------------------------------------------------+
 void OnTick() {
-    // 1. Time Filter (Killzone)
+    // 1. Manage Existing Trades (Dynamic Exits)
+    ManageExits();
+
+    // 2. Filters
     if(Inp_UseKillzones && !IsInKillzone()) return;
     
-    // 2. Daily Profile Check (Seek & Destroy Filter)
-    if(Inp_Filter_SeekDestroy && IsSeekAndDestroyProfile()) return;
-    
-    // 3. One Trade Per Bar Logic (Prevents Order Spamming)
+    // 3. One Trade Per Bar
     datetime currentBarTime = iTime(Symbol(), Inp_LTF_Entry, 0);
     if(currentBarTime == lastEntryBarTime) return; 
     
-    // 4. Determine Bias
-    currentBias = DetermineBias();
-    if(currentBias == 0) return;
+    // 4. Bias & Signal
+    int bias = DetermineBias();
+    if(bias == 0) return;
     
-    // 5. Look for Entries if no open positions
     if(PositionsTotal() == 0) {
-        if(currentBias == 1) {
-            if(CheckLongEntry()) {
-                ExecuteTrade(ORDER_TYPE_BUY);
-                lastEntryBarTime = currentBarTime; // Lock this bar after execution
-            }
+        if(bias == 1 && CheckLongEntry()) {
+            ExecuteTrade(ORDER_TYPE_BUY);
+            lastEntryBarTime = currentBarTime;
         }
-        else if(currentBias == -1) {
-            if(CheckShortEntry()) {
-                ExecuteTrade(ORDER_TYPE_SELL);
-                lastEntryBarTime = currentBarTime; // Lock this bar after execution
-            }
+        else if(bias == -1 && CheckShortEntry()) {
+            ExecuteTrade(ORDER_TYPE_SELL);
+            lastEntryBarTime = currentBarTime;
         }
     }
 }
 
 //+------------------------------------------------------------------+
-//| MODULE: Killzone Checker                                         |
+//| HYBRID EXIT MANAGEMENT SYSTEM                                    |
 //+------------------------------------------------------------------+
-bool IsInKillzone() {
-    datetime timeCurrent = TimeCurrent();
-    MqlDateTime dt;
-    TimeToStruct(timeCurrent, dt);
-    
-    string currentTimeStr = StringFormat("%02d:%02d", dt.hour, dt.min);
-    if(currentTimeStr >= Inp_KZ_Start && currentTimeStr <= Inp_KZ_End) return true;
-    return false;
-}
+void ManageExits() {
+    for(int i = PositionsTotal() - 1; i >= 0; i--) {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        if(PositionGetInteger(POSITION_MAGIC) != 20261337) continue;
 
-//+------------------------------------------------------------------+
-//| MODULE: Seek & Destroy Filter                                    |
-//+------------------------------------------------------------------+
-bool IsSeekAndDestroyProfile() {
-    // Advanced Logic Placeholder
-    return false; 
-}
-
-//+------------------------------------------------------------------+
-//| MODULE: HTF Bias                                                 |
-//+------------------------------------------------------------------+
-int DetermineBias() {
-    double htfClose1 = iClose(Symbol(), Inp_HTF_Bias, 1);
-    double htfClose2 = iClose(Symbol(), Inp_HTF_Bias, 2);
-    
-    int bias = 0;
-    if(htfClose1 > htfClose2) bias = 1;
-    else if(htfClose1 < htfClose2) bias = -1;
-    
-    return bias;
-}
-
-//+------------------------------------------------------------------+
-//| MODULE: Long Entry Logic (Routing)                               |
-//+------------------------------------------------------------------+
-bool CheckLongEntry() {
-    bool validEntry = false;
-    string signalType = "";
-
-    if(Inp_Use_Unicorn && CheckUnicornLong()) { validEntry = true; signalType = "Unicorn"; }
-    if(!validEntry && Inp_Use_IFVG && CheckIFVGLong()) { validEntry = true; signalType = "IFVG"; }
-    if(!validEntry && Inp_Use_C2C3 && CheckC2C3_Long()) { validEntry = true; signalType = "C2/C3"; }
-    if(!validEntry && Inp_Use_CISD && CheckCISD_Long()) { validEntry = true; signalType = "CISD"; }
-    
-    if(validEntry) Print("SIGNAL: Bullish Entry Found! Type: ", signalType, " at ", TimeToString(TimeCurrent()));
-    return validEntry;
-}
-
-//+------------------------------------------------------------------+
-//| MODULE: Short Entry Logic (Routing)                              |
-//+------------------------------------------------------------------+
-bool CheckShortEntry() {
-    bool validEntry = false;
-    string signalType = "";
-
-    if(Inp_Use_C2C3 && CheckC2C3_Short()) { validEntry = true; signalType = "C2/C3"; }
-    
-    if(validEntry) Print("SIGNAL: Bearish Entry Found! Type: ", signalType, " at ", TimeToString(TimeCurrent()));
-    return validEntry;
-}
-
-//+------------------------------------------------------------------+
-//| LOGIC: C2 / C3 Closures (Long)                                   |
-//+------------------------------------------------------------------+
-bool CheckC2C3_Long() {
-    double c1Low = iLow(Symbol(), Inp_LTF_Entry, 3);
-    double c1High = iHigh(Symbol(), Inp_LTF_Entry, 3);
-    double c2Close = iClose(Symbol(), Inp_LTF_Entry, 2);
-    double c2High = iHigh(Symbol(), Inp_LTF_Entry, 2);
-    double c3Close = iClose(Symbol(), Inp_LTF_Entry, 1);
-    
-    if(c1Low <= iLow(Symbol(), Inp_LTF_Entry, 4) && c1Low <= iLow(Symbol(), Inp_LTF_Entry, 5)) {
-        if(c2Close > c1High) return true;
-        if(c2Close <= c1High && c3Close > c2High) return true;
-    }
-    return false;
-}
-
-bool CheckC2C3_Short() {
-    double c1High = iHigh(Symbol(), Inp_LTF_Entry, 3);
-    double c1Low = iLow(Symbol(), Inp_LTF_Entry, 3);
-    double c2Close = iClose(Symbol(), Inp_LTF_Entry, 2);
-    double c2Low = iLow(Symbol(), Inp_LTF_Entry, 2);
-    double c3Close = iClose(Symbol(), Inp_LTF_Entry, 1);
-    
-    if(c1High >= iHigh(Symbol(), Inp_LTF_Entry, 4) && c1High >= iHigh(Symbol(), Inp_LTF_Entry, 5)) {
-        if(c2Close < c1Low) return true;
-        if(c2Close >= c1Low && c3Close < c2Low) return true;
-    }
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| MODULE: Structural Scanning & Visualization (Debugging)          |
-//+------------------------------------------------------------------+
-void DrawDebugBox(string name, datetime time1, double price1, datetime time2, double price2, color clr) {
-    if(ObjectFind(0, name) < 0) {
-        ObjectCreate(0, name, OBJ_RECTANGLE, 0, time1, price1, time2, price2);
-        ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-        ObjectSetInteger(0, name, OBJPROP_FILL, true);
-        ObjectSetInteger(0, name, OBJPROP_BACK, true);
-    }
-}
-
-//+------------------------------------------------------------------+
-//| LOGIC: Inversion FVG (Algorithmic Scan)                          |
-//+------------------------------------------------------------------+
-bool CheckIFVGLong() {
-    for(int i = 5; i <= 20; i++) {
-        double high3 = iHigh(Symbol(), Inp_LTF_Entry, i);
-        double low1  = iLow(Symbol(), Inp_LTF_Entry, i-2);
+        double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        double currentSL  = PositionGetDouble(POSITION_SL);
+        double currentTP  = PositionGetDouble(POSITION_TP);
+        double currentPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
         
-        if(low1 > high3) {
-            double fvgTop = low1;
-            double fvgBot = high3;
-            double recentClose = iClose(Symbol(), Inp_LTF_Entry, 2);
-            if(recentClose > fvgTop) {
-                DrawDebugBox("IFVG_"+IntegerToString(i), iTime(Symbol(), Inp_LTF_Entry, i), fvgTop, iTime(Symbol(), Inp_LTF_Entry, 0), fvgBot, clrDarkCyan);
-                double currentLow = iLow(Symbol(), Inp_LTF_Entry, 1);
-                double currentClose = iClose(Symbol(), Inp_LTF_Entry, 1);
-                if(currentLow <= fvgTop && currentClose > fvgTop) return true;
+        double slDistance = MathAbs(entryPrice - currentSL);
+        bool modified = false;
+        double newSL = currentSL;
+
+        // --- 1. Break-Even Logic ---
+        if(Inp_Use_BE) {
+            double profitInPoints = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+            if(profitInPoints >= (slDistance * Inp_BE_TriggerRR)) {
+                if((PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY && newSL < entryPrice) ||
+                   (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL && (newSL > entryPrice || newSL == 0))) {
+                    newSL = entryPrice + (SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point()); // BE + Spread
+                    Print("EXIT: Break-Even Triggered. Moving SL to Entry.");
+                    modified = true;
+                }
+            }
+        }
+
+        // --- 2. Standard Trailing Stop ---
+        if(Inp_Use_Trail) {
+            double trailDist = Inp_TrailPoints * Point();
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+                if(currentPrice - trailDist > newSL) {
+                    newSL = currentPrice - trailDist;
+                    modified = true;
+                }
+            } else {
+                if(currentPrice + trailDist < newSL || newSL == 0) {
+                    newSL = currentPrice + trailDist;
+                    modified = true;
+                }
+            }
+        }
+
+        // --- 3. ICT Candle-based Trailing (Move to Prev Candle Low/High) ---
+        if(Inp_Use_CandleTrail) {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+                double prevLow = iLow(Symbol(), Inp_LTF_Entry, 1);
+                if(prevLow > newSL) {
+                    newSL = prevLow;
+                    modified = true;
+                }
+            } else {
+                double prevHigh = iHigh(Symbol(), Inp_LTF_Entry, 1);
+                if(prevHigh < newSL || newSL == 0) {
+                    newSL = prevHigh;
+                    modified = true;
+                }
+            }
+        }
+
+        // Apply Modifications
+        if(modified && newSL != currentSL) {
+            if(!trade.PositionModify(ticket, newSL, currentTP)) {
+                Print("DEBUG: Failed to modify SL. Error: ", GetLastError());
+            } else {
+                Print("EXIT: SL Adjusted to ", newSL, " based on Hybrid rules.");
             }
         }
     }
-    return false;
 }
 
 //+------------------------------------------------------------------+
-//| LOGIC: Intracandle CISD (Algorithmic Scan)                       |
-//+------------------------------------------------------------------+
-bool CheckCISD_Long() {
-    int lastBearishCandleIdx = -1;
-    for(int i = 2; i <= 10; i++) {
-        if(iClose(Symbol(), Inp_LTF_Entry, i) < iOpen(Symbol(), Inp_LTF_Entry, i)) {
-            lastBearishCandleIdx = i;
-            break;
-        }
-    }
-    if(lastBearishCandleIdx != -1) {
-        double obHigh = iHigh(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx);
-        double currentClose = iClose(Symbol(), Inp_LTF_Entry, 1);
-        if(currentClose > obHigh) {
-            DrawDebugBox("CISD_"+IntegerToString(lastBearishCandleIdx), iTime(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx), obHigh, iTime(Symbol(), Inp_LTF_Entry, 0), iLow(Symbol(), Inp_LTF_Entry, lastBearishCandleIdx), clrDarkGreen);
-            return true; 
-        }
-    }
-    return false;
-}
-
-bool CheckUnicornLong() { return false; }
-
-//+------------------------------------------------------------------+
-//| EXECUTION (With Robust Validation & Logging)                     |
+//| EXECUTION (With Initial RR Calculation)                          |
 //+------------------------------------------------------------------+
 void ExecuteTrade(ENUM_ORDER_TYPE type) {
     double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
     double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
     double price = (type == ORDER_TYPE_BUY) ? ask : bid;
-    double sl = 0.0;
+    double sl = 0.0, tp = 0.0;
     
-    // 1. Calculate Structural SL
-    if(type == ORDER_TYPE_BUY) {
-        sl = iLow(Symbol(), Inp_LTF_Entry, 1) - (Inp_SL_Buffer * Point());
-    } else {
-        sl = iHigh(Symbol(), Inp_LTF_Entry, 1) + (Inp_SL_Buffer * Point());
-    }
+    // 1. SL Calculation
+    if(type == ORDER_TYPE_BUY) sl = iLow(Symbol(), Inp_LTF_Entry, 1) - (Inp_SL_Buffer * Point());
+    else sl = iHigh(Symbol(), Inp_LTF_Entry, 1) + (Inp_SL_Buffer * Point());
     
-    // 2. Validate SL against Broker's StopLevel
+    // Validate StopLevel
     double stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * Point();
-    double minSlDistance = stopLevel + SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
+    double minStep = stopLevel + SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
     
-    if(type == ORDER_TYPE_BUY) {
-        if(price - sl < minSlDistance) {
-            sl = price - minSlDistance;
-            Print("DEBUG: SL too tight (StopLevel/Spread). Adjusted Buy SL to: ", sl);
-        }
-    } else {
-        if(sl - price < minSlDistance) {
-            sl = price + minSlDistance;
-            Print("DEBUG: SL too tight (StopLevel/Spread). Adjusted Sell SL to: ", sl);
-        }
+    if(type == ORDER_TYPE_BUY && (price - sl < minStep)) sl = price - minStep;
+    if(type == ORDER_TYPE_SELL && (sl - price < minStep)) sl = price + minStep;
+
+    // 2. TP Calculation (Fixed RR)
+    if(Inp_Use_RR) {
+        double risk = MathAbs(price - sl);
+        if(type == ORDER_TYPE_BUY) tp = price + (risk * Inp_TargetRR);
+        else tp = price - (risk * Inp_TargetRR);
     }
 
-    // 3. Final Execution & Detailed Result Logging
-    Print("ATTEMPT: Sending ", EnumToString(type), " Order. Price: ", price, " SL: ", sl, " Lot: ", Inp_LotSize);
-    
-    ResetLastError();
-    if(trade.PositionOpen(Symbol(), type, Inp_LotSize, price, sl, 0.0, "TTrades ICT Master")) {
-        Print("SUCCESS: Order executed. Ticket: ", trade.ResultDeal());
+    Print("ATTEMPT: Opening ", EnumToString(type), " at ", price, " SL: ", sl, " TP: ", tp);
+    if(trade.PositionOpen(Symbol(), type, Inp_LotSize, price, sl, tp, "TTrades ICT Master")) {
+        Print("SUCCESS: Ticket ", trade.ResultDeal());
     } else {
-        Print("ERROR: Execution Failed! Code: ", GetLastError(), " - ", trade.ResultRetcodeDescription());
-        Print("DEBUG INFO: Broker StopLevel: ", stopLevel, " Current Spread: ", SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
+        Print("ERROR: Code ", GetLastError(), " - ", trade.ResultRetcodeDescription());
     }
 }
+
+//+------------------------------------------------------------------+
+//| MODULES (Signals & Logic)                                        |
+//+------------------------------------------------------------------+
+bool IsInKillzone() {
+    datetime t = TimeCurrent(); MqlDateTime dt; TimeToStruct(t, dt);
+    string s = StringFormat("%02d:%02d", dt.hour, dt.min);
+    return (s >= Inp_KZ_Start && s <= Inp_KZ_End);
+}
+
+int DetermineBias() {
+    double c1 = iClose(Symbol(), Inp_HTF_Bias, 1);
+    double c2 = iClose(Symbol(), Inp_HTF_Bias, 2);
+    return (c1 > c2) ? 1 : ((c1 < c2) ? -1 : 0);
+}
+
+bool CheckLongEntry() {
+    if(Inp_Use_IFVG && CheckIFVGLong()) return true;
+    if(Inp_Use_C2C3 && CheckC2C3_Long()) return true;
+    if(Inp_Use_CISD && CheckCISD_Long()) return true;
+    return false;
+}
+
+bool CheckShortEntry() {
+    if(Inp_Use_C2C3 && CheckC2C3_Short()) return true;
+    return false;
+}
+
+// Signal Logic Implementation (Shortened for brevity, same as previous)
+bool CheckC2C3_Long() {
+    double c1L = iLow(Symbol(), Inp_LTF_Entry, 3), c1H = iHigh(Symbol(), Inp_LTF_Entry, 3);
+    double c2C = iClose(Symbol(), Inp_LTF_Entry, 2), c2H = iHigh(Symbol(), Inp_LTF_Entry, 2);
+    double c3C = iClose(Symbol(), Inp_LTF_Entry, 1);
+    if(c1L <= iLow(Symbol(), Inp_LTF_Entry, 4) && c1L <= iLow(Symbol(), Inp_LTF_Entry, 5)) {
+        if(c2C > c1H || (c2C <= c1H && c3C > c2H)) return true;
+    }
+    return false;
+}
+
+bool CheckC2C3_Short() {
+    double c1H = iHigh(Symbol(), Inp_LTF_Entry, 3), c1L = iLow(Symbol(), Inp_LTF_Entry, 3);
+    double c2C = iClose(Symbol(), Inp_LTF_Entry, 2), c2L = iLow(Symbol(), Inp_LTF_Entry, 2);
+    double c3C = iClose(Symbol(), Inp_LTF_Entry, 1);
+    if(c1H >= iHigh(Symbol(), Inp_LTF_Entry, 4) && c1H >= iHigh(Symbol(), Inp_LTF_Entry, 5)) {
+        if(c2C < c1L || (c2C >= c1L && c3C < c2L)) return true;
+    }
+    return false;
+}
+
+bool CheckIFVGLong() {
+    for(int i=5; i<=20; i++) {
+        double h3 = iHigh(Symbol(), Inp_LTF_Entry, i), l1 = iLow(Symbol(), Inp_LTF_Entry, i-2);
+        if(l1 > h3 && iClose(Symbol(), Inp_LTF_Entry, 2) > l1) {
+            if(iLow(Symbol(), Inp_LTF_Entry, 1) <= l1 && iClose(Symbol(), Inp_LTF_Entry, 1) > l1) return true;
+        }
+    }
+    return false;
+}
+
+bool CheckCISD_Long() {
+    for(int i=2; i<=10; i++) {
+        if(iClose(Symbol(), Inp_LTF_Entry, i) < iOpen(Symbol(), Inp_LTF_Entry, i)) {
+            if(iClose(Symbol(), Inp_LTF_Entry, 1) > iHigh(Symbol(), Inp_LTF_Entry, i)) return true;
+            break;
+        }
+    }
+    return false;
+}
+bool CheckUnicornLong() { return false; }
