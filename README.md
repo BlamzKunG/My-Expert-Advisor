@@ -1,31 +1,30 @@
-# My-Expert-Advisor
+# My Expert Advisor (EA) Collection
 
-## MACD Martingale Grid EA
-A MetaTrader 5 Expert Advisor that uses MACD for trend identification combined with a Martingale Grid strategy for position management.
+Welcome to my personal repository for Algorithmic Trading and Expert Advisors (EAs). This repository serves as a centralized hub for various automated trading systems, custom indicators, and quantitative research models primarily built in MQL4 and MQL5 for MetaTrader.
 
-### Features
-- **MACD Trend Identification**: Uses MACD main line and signal line crossovers to determine trade direction.
-- **Martingale Grid**: Automatically adds positions at set grid steps with a lot multiplier.
-- **Basket Take Profit**: Closes all positions in a direction when the total profit reaches a target in USD.
-- **Equity Protection**: Automatically closes all positions if the account drawdown exceeds a specified percentage.
-- **Trend Reversal Cut**: Optionally closes positions if the MACD trend reverses against the current basket.
-- **Trailing Stop**: (New in v1.01) Automatically trails the stop loss to lock in profits.
-- **Max Spread Filter**: (New in v1.01) Prevents opening new positions when the market spread is too high.
-- **Magic Number Support**: (New in v1.01) Allows running multiple instances on the same symbol.
+## Repository Structure
 
-### Version History
-- **v1.02**: 
-    - Added EMA Trend Filter on higher timeframes (e.g., H4 EMA 200).
-    - Added Dynamic Grid Step based on ATR.
-    - Improved MACD entry logic for better responsiveness.
-    - Optimized indicator handling and memory management.
-- **v1.01**: 
-    - Added Trailing Stop feature.
-    - Added Max Spread filter.
-    - Added Magic Number input.
-    - Improved Pip/Point calculation for 3/5 digit brokers.
-    - Optimized position management logic.
-- **v1.00**: Initial release.
+To maintain organization and modularity, each Expert Advisor or trading system is contained within its own dedicated directory. Each directory includes its respective source code, blueprints, and documentation.
 
-### Disclaimer
-Trading involves significant risk. This EA is for educational purposes only. Always test on a demo account before using real funds.
+### 📂 Current Projects:
+
+*   **[`TTrades_ICT_Master/`](TTrades_ICT_Master/)**
+    *   **Type:** MQL5 Expert Advisor
+    *   **Description:** An advanced, highly parameterized algorithmic framework based on ICT (Inner Circle Trader) concepts. It synthesizes over 100 strategic video transcripts to implement mechanics like Intracandle CISD, Candle 2/3 Closures, Inversion FVGs, the Unicorn Model, and "Seek & Destroy" daily profile filters. Features built-in algorithmic scanning for automated execution.
+    *   **Documentation:** See the [EA Blueprint](TTrades_ICT_Master/TTrades_EA_Blueprint.md) inside the folder for the complete architectural breakdown.
+
+*(More EAs will be added to this repository over time.)*
+
+## Development Philosophy
+
+*   **Flexibility:** Systems are built with highly parameterized inputs to allow deep optimization of timeframes, session hours (Killzones), and entry logic toggles.
+*   **Modularity:** Clean state-machine architectures separating Bias, Validation, Entry, and Execution.
+*   **Function over Form:** Prioritizing robust algorithmic scanning and execution logic over manual chart interaction.
+
+## License
+
+This repository is licensed under the **MIT License**.
+
+You are free to use, modify, distribute, and integrate this code into your own projects (including commercial projects) as long as the original copyright notice and permission notice are included. 
+
+See the [LICENSE](LICENSE) file for complete details.
