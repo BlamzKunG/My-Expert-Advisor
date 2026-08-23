@@ -1,31 +1,31 @@
-# My-Expert-Advisor
+# MetaTrader 5 Expert Advisors Collection
 
-## MACD Martingale Grid EA
-A MetaTrader 5 Expert Advisor that uses MACD for trend identification combined with a Martingale Grid strategy for position management.
+Collection of automated trading Expert Advisors (EA) and utility scripts written in MQL5 for MetaTrader 5.
 
-### Features
-- **MACD Trend Identification**: Uses MACD main line and signal line crossovers to determine trade direction.
-- **Martingale Grid**: Automatically adds positions at set grid steps with a lot multiplier.
-- **Basket Take Profit**: Closes all positions in a direction when the total profit reaches a target in USD.
-- **Equity Protection**: Automatically closes all positions if the account drawdown exceeds a specified percentage.
-- **Trend Reversal Cut**: Optionally closes positions if the MACD trend reverses against the current basket.
-- **Trailing Stop**: (New in v1.01) Automatically trails the stop loss to lock in profits.
-- **Max Spread Filter**: (New in v1.01) Prevents opening new positions when the market spread is too high.
-- **Magic Number Support**: (New in v1.01) Allows running multiple instances on the same symbol.
+## Included Expert Advisors
 
-### Version History
-- **v1.02**: 
-    - Added EMA Trend Filter on higher timeframes (e.g., H4 EMA 200).
-    - Added Dynamic Grid Step based on ATR.
-    - Improved MACD entry logic for better responsiveness.
-    - Optimized indicator handling and memory management.
-- **v1.01**: 
-    - Added Trailing Stop feature.
-    - Added Max Spread filter.
-    - Added Magic Number input.
-    - Improved Pip/Point calculation for 3/5 digit brokers.
-    - Optimized position management logic.
-- **v1.00**: Initial release.
+### 1. MACD Martingale Grid EA (`MACD_Martingale_Grid.mq5`)
+- Strategy: Combines MACD trend momentum with dynamic grid positioning and position management.
+- Platform: MetaTrader 5
 
-### Disclaimer
-Trading involves significant risk. This EA is for educational purposes only. Always test on a demo account before using real funds.
+### 2. ORC Crypto Ichimoku H4 EA (`ORC_Crypto_Ichimoku_H4_EA.mq5`)
+- Strategy: Quantitative crypto trading strategy utilizing Ichimoku Kinko Hyo indicator cloud breakouts and Tenkan/Kijun crosses on the 4-Hour (H4) timeframe.
+- Platform: MetaTrader 5
+
+### 3. Haruu Signal Receiver EA (`HaruuSignalReceiver.mq5`)
+- Strategy: Client-side signal listener EA that connects to the Haruu Signal API to execute real-time copy trade orders with local lot management and risk filters.
+- Platform: MetaTrader 5
+
+### 4. Export Multi Data Script (`ExportMultiData_M5.mq5`)
+- Utility: Historical multi-currency candlestick and tick data exporter for AI training pipelines and backtesting datasets.
+- Platform: MetaTrader 5
+
+## Installation
+1. Open MetaTrader 5.
+2. Go to `File` > `Open Data Folder`.
+3. Copy `.mq5` files into `MQL5/Experts/` (or `MQL5/Scripts/` for export scripts).
+4. In MetaEditor, click `Compile`.
+5. Attach the EA to your desired chart with `Allow Algo Trading` enabled.
+
+## License
+MIT License
