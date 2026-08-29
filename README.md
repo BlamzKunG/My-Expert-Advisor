@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-MetaTrader%205-orange.svg)](https://www.metatrader5.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A collection of algorithmic trading Expert Advisors (EAs) and parameter presets for MetaTrader 5 (MT5).
+A collection of algorithmic trading Expert Advisors (EAs), Scripts, and parameter presets for MetaTrader 5 (MT5).
 
 ---
 
@@ -13,14 +13,19 @@ A collection of algorithmic trading Expert Advisors (EAs) and parameter presets 
 ```text
 .
 ├── Experts/                      # MQL5 Expert Advisor source files (.mq5)
-│   ├── XAUUSD_Advanced_Grid_EA.mq5
-│   └── XAUUSD_Adaptive_MeanReversion_EA.mq5
+│   ├── HaruuSignalReceiver.mq5
+│   ├── MACD_Martingale_Grid.mq5
+│   ├── ORC_Crypto_Ichimoku_H4_EA.mq5
+│   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
+│   └── XAUUSD_Advanced_Grid_EA.mq5
+├── Scripts/                      # MQL5 Script source files (.mq5)
+│   └── ExportMultiData_M5.mq5
 ├── presets/                      # Parameter preset files (.set)
-│   ├── Advanced_Grid/            # Presets for Advanced Grid EA
+│   ├── Advanced_Grid/
 │   │   ├── Conservative_XAUUSD.set
 │   │   ├── Balanced_XAUUSD.set
 │   │   └── Aggressive_XAUUSD.set
-│   └── MeanReversion_Grid/       # Presets for Mean-Reversion Grid EA
+│   └── MeanReversion_Grid/
 │       ├── SmallAccount_500USD.set
 │       ├── Standard_2000USD.set
 │       └── Pro_5000USD.set
@@ -30,12 +35,21 @@ A collection of algorithmic trading Expert Advisors (EAs) and parameter presets 
 
 ---
 
-## Available EAs and Presets
+## Available Files
 
-| Expert Advisor (.mq5) | Recommended Timeframe / Asset | Preset Directory |
+### Expert Advisors
+| File | Category / Target Asset | Preset Directory |
 | :--- | :--- | :--- |
-| [`Experts/XAUUSD_Advanced_Grid_EA.mq5`](Experts/XAUUSD_Advanced_Grid_EA.mq5) | XAUUSD (M5 / M15) | [`presets/Advanced_Grid/`](presets/Advanced_Grid/) |
-| [`Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5`](Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5) | XAUUSD (M15) | [`presets/MeanReversion_Grid/`](presets/MeanReversion_Grid/) |
+| [`Experts/XAUUSD_Advanced_Grid_EA.mq5`](Experts/XAUUSD_Advanced_Grid_EA.mq5) | Grid / XAUUSD | [`presets/Advanced_Grid/`](presets/Advanced_Grid/) |
+| [`Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5`](Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5) | Mean Reversion / XAUUSD | [`presets/MeanReversion_Grid/`](presets/MeanReversion_Grid/) |
+| [`Experts/MACD_Martingale_Grid.mq5`](Experts/MACD_Martingale_Grid.mq5) | Grid / Multi-Asset | - |
+| [`Experts/ORC_Crypto_Ichimoku_H4_EA.mq5`](Experts/ORC_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | - |
+| [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | - |
+
+### Scripts
+| File | Description |
+| :--- | :--- |
+| [`Scripts/ExportMultiData_M5.mq5`](Scripts/ExportMultiData_M5.mq5) | Multi-Currency M5 Historical Data Exporter |
 
 ---
 
@@ -43,15 +57,16 @@ A collection of algorithmic trading Expert Advisors (EAs) and parameter presets 
 
 1. Clone or Download Repository:
    ```bash
-   git clone https://github.com/BlamzKunG/XAUUSD-Grid-EA.git
+   git clone https://github.com/BlamzKunG/My-Expert-Advisor.git
    ```
 2. Copy Files to MT5 Data Folder:
    - In MetaTrader 5, click File -> Open Data Folder.
-   - Copy all `.mq5` files from `Experts/` into `MQL5/Experts/`.
+   - Copy all files from `Experts/` into `MQL5/Experts/`.
+   - Copy all files from `Scripts/` into `MQL5/Scripts/`.
    - Copy the `presets/` folder into `MQL5/Presets/`.
 3. Compile:
    - Open MetaEditor (F4).
-   - Open the target EA from the Navigator panel.
+   - Open the target EA or Script from the Navigator panel.
    - Click Compile (F7) and ensure 0 errors, 0 warnings.
 4. Attach to Chart:
    - Drag the compiled EA from MT5 Navigator onto your chart.
@@ -60,20 +75,12 @@ A collection of algorithmic trading Expert Advisors (EAs) and parameter presets 
 
 ---
 
-## Backtesting Guidelines
+## Adding New Files to this Collection
 
-- Execution Model: Use "Every tick based on real ticks" for accurate simulation.
-- Spread: Test with realistic broker spreads and perform stress tests with elevated spreads.
-- Forward Testing: Validate any EA on a Demo account before live deployment.
-
----
-
-## Adding New EAs to this Collection
-
-When contributing or adding new EAs to this repository:
-1. Place the MQL5 source file in the [`Experts/`](Experts/) directory.
-2. Place associated `.set` files in a dedicated subfolder under [`presets/<EA_Name>/`](presets/).
-3. Add an entry to the [Available EAs and Presets](#available-eas-and-presets) table above.
+1. Place new Expert Advisors in `Experts/`.
+2. Place new Scripts in `Scripts/`.
+3. Place associated presets in `presets/<EA_Name>/`.
+4. Update the Available Files table in this README.
 
 ---
 
