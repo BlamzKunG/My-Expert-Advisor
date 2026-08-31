@@ -19,6 +19,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
 │   └── XAUUSD_Advanced_Grid_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
+│   ├── Quantum_Queen_Supertrend_Signal.pine
 │   └── Supertrend_DeMarker_StochRSI_Signal.pine
 ├── Scripts/                      # MQL5 Script source files (.mq5)
 │   └── ExportMultiData_M5.mq5
@@ -51,6 +52,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Indicators (TradingView / Pine Script)
 | File | Platform | Description |
 | :--- | :--- | :--- |
+| [`Indicators/Quantum_Queen_Supertrend_Signal.pine`](Indicators/Quantum_Queen_Supertrend_Signal.pine) | TradingView (Pine Script v5) | Quantum Queen X 4.3 12-Strategy MTF DeMarker Engine with Supertrend Main Trend Filter |
 | [`Indicators/Supertrend_DeMarker_StochRSI_Signal.pine`](Indicators/Supertrend_DeMarker_StochRSI_Signal.pine) | TradingView (Pine Script v5) | Supertrend Main Trend + DeMarker & Stoch RSI Entry with 10-bar cooldown filter |
 
 ### Scripts
