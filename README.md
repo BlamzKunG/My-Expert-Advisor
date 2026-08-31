@@ -16,6 +16,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── HaruuSignalReceiver.mq5
 │   ├── MACD_Martingale_Grid.mq5
 │   ├── ORC_Crypto_Ichimoku_H4_EA.mq5
+│   ├── Quantum_Emperor_EA.mq5
 │   ├── Quantum_Queen_Supertrend_EA.mq5
 │   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
 │   └── XAUUSD_Advanced_Grid_EA.mq5
@@ -44,6 +45,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors
 | File | Category / Target Asset | Preset Directory |
 | :--- | :--- | :--- |
+| [`Experts/Quantum_Emperor_EA.mq5`](Experts/Quantum_Emperor_EA.mq5) | Range Breakout (ORB) / XAUUSD & FX | - |
 | [`Experts/Quantum_Queen_Supertrend_EA.mq5`](Experts/Quantum_Queen_Supertrend_EA.mq5) | Multi-Strategy / XAUUSD & FX | - |
 | [`Experts/XAUUSD_Advanced_Grid_EA.mq5`](Experts/XAUUSD_Advanced_Grid_EA.mq5) | Grid / XAUUSD | [`presets/Advanced_Grid/`](presets/Advanced_Grid/) |
 | [`Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5`](Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5) | Mean Reversion / XAUUSD | [`presets/MeanReversion_Grid/`](presets/MeanReversion_Grid/) |
