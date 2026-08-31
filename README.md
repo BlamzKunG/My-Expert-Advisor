@@ -16,6 +16,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── HaruuSignalReceiver.mq5
 │   ├── MACD_Martingale_Grid.mq5
 │   ├── ORC_Crypto_Ichimoku_H4_EA.mq5
+│   ├── Quantum_Queen_Supertrend_EA.mq5
 │   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
 │   └── XAUUSD_Advanced_Grid_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
@@ -43,6 +44,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors
 | File | Category / Target Asset | Preset Directory |
 | :--- | :--- | :--- |
+| [`Experts/Quantum_Queen_Supertrend_EA.mq5`](Experts/Quantum_Queen_Supertrend_EA.mq5) | Multi-Strategy / XAUUSD & FX | - |
 | [`Experts/XAUUSD_Advanced_Grid_EA.mq5`](Experts/XAUUSD_Advanced_Grid_EA.mq5) | Grid / XAUUSD | [`presets/Advanced_Grid/`](presets/Advanced_Grid/) |
 | [`Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5`](Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5) | Mean Reversion / XAUUSD | [`presets/MeanReversion_Grid/`](presets/MeanReversion_Grid/) |
 | [`Experts/MACD_Martingale_Grid.mq5`](Experts/MACD_Martingale_Grid.mq5) | Grid / Multi-Asset | - |
@@ -52,8 +54,8 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Indicators (TradingView / Pine Script)
 | File | Platform | Description |
 | :--- | :--- | :--- |
-| [`Indicators/Quantum_Queen_Supertrend_Signal.pine`](Indicators/Quantum_Queen_Supertrend_Signal.pine) | TradingView (Pine Script v5) | Quantum Queen X 4.3 12-Strategy MTF DeMarker Engine with Supertrend Main Trend Filter |
-| [`Indicators/Supertrend_DeMarker_StochRSI_Signal.pine`](Indicators/Supertrend_DeMarker_StochRSI_Signal.pine) | TradingView (Pine Script v5) | Supertrend Main Trend + DeMarker & Stoch RSI Entry with 10-bar cooldown filter |
+| [`Indicators/Quantum_Queen_Supertrend_Signal.pine`](Indicators/Quantum_Queen_Supertrend_Signal.pine) | TradingView (Pine Script v6) | Quantum Queen X 4.3 12-Strategy MTF DeMarker Engine with Supertrend Main Trend Filter |
+| [`Indicators/Supertrend_DeMarker_StochRSI_Signal.pine`](Indicators/Supertrend_DeMarker_StochRSI_Signal.pine) | TradingView (Pine Script v6) | Supertrend Main Trend + DeMarker & Stoch RSI Entry with 10-bar cooldown filter |
 
 ### Scripts
 | File | Description |
