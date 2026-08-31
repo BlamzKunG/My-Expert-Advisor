@@ -4,7 +4,7 @@
 //|                                       https://www.mql5.com       |
 //+------------------------------------------------------------------+
 #property copyright "Quantum Queen X (Supertrend & Smart Grid Edition)"
-#property version   "4.40"
+#property version   "4.50"
 #property description "Quantum Queen X Core with Supertrend Trend Filter & Smart ATR Recovery Grid"
 #property strict 
 
@@ -46,6 +46,14 @@ enum QQ_GRID_MODE
    QQ_GRID_ORIGINAL=1          // Original Source Portfolio Grid (Concurrent Multi-Strategy)
   };
 
+enum QQ_TP_MODE
+  {
+   QQ_TP_ORIGINAL_HARD=0,      // Original Hard TP (Broker Server TP - Standard)
+   QQ_TP_VISUAL_CANDLE=1,      // Visual TP (Candle Close Beyond TP Level)
+   QQ_TP_BASKET_AVERAGE=2,     // Basket Average TP (Combined Weighted Average)
+   QQ_TP_HYBRID=3              // Hybrid (Hard TP on single, Basket TP on grid)
+  };
+
 enum QQ_DD_MODE
   {
    QQ_DD_OFF=0,               // Off
@@ -80,7 +88,7 @@ enum QQ_HOUR_OF_DAY
   };
 
 //--- Input Parameters
-input string            InpNoteName="Quantum Queen MT5 v4.4 (Supertrend + Smart Grid)"; // Name:
+input string            InpNoteName="Quantum Queen MT5 v4.5 (Supertrend + Grid Pro)"; // Name:
 input string            InpNoteOverview="Quantum Queen Core + Supertrend & Advanced Risk Control"; // Overview:
 
 input group ">>>> 1. Supertrend Trend Filter"
@@ -92,20 +100,32 @@ input bool              InpCloseOnSTFlip=false; // Close positions on Supertrend
 
 input group ">>>> 2. Grid Management & Recovery"
 input QQ_GRID_MODE      InpGridMode=QQ_GRID_SMART_ATR; // Grid Mode (Smart ATR vs Original)
-input int               InpMaxGridRecoveryOrders=2; // Max Recovery Orders (e.g. 2 = Max 3 orders)
+input int               InpMaxOrders=100; // Max Orders Allowed per Basket (e.g. 100)
 input double            InpGridAtrMultiplier=1.0; // Grid Step ATR Multiplier
 input double            InpGridBaseDistance=200.0; // Grid Step Base Distance (Points)
 input double            InpGridLotMultiplier=1.2; // Lot Multiplier for Recovery Orders
-input int               InpBasketTakeProfit=250; // Basket Take Profit (Points above Avg Price)
-input bool              InpCutLossOnMaxStep=true; // Hard Cut-Loss on (MaxOrder + 1) Step
+input bool              InpCutLossOnMaxStep=true; // Hard Cut-Loss on (MaxOrders + 1) Step
 
-input group ">>>> 3. General Settings"
+input group ">>>> 3. Profit & Take Profit Modes"
+input QQ_TP_MODE        InpTPMode=QQ_TP_ORIGINAL_HARD; // Take Profit Mode (Original / Visual / Basket)
+input int               InpTakeProfit=500; // Take Profit (Points, 0=off)
+input int               InpBasketTakeProfit=250; // Basket Take Profit (Points above Avg Price, 0=off)
+input ENUM_TIMEFRAMES   InpVisualTP_TF=PERIOD_CURRENT; // Visual TP Evaluation Timeframe
+
+input group ">>>> 4. Stop Loss, Break-Even & Trailing Stop"
+input int               InpStopLoss=0; // Stop Loss (Points, 0=off)
+input int               InpBreakEvenStart=0; // Break-even activation (Points profit, 0=off)
+input int               InpBreakEvenOffset=10; // Break-even offset (Points above entry)
+input int               InpTrailingStart=0; // Trailing Stop activation (Points profit, 0=off)
+input int               InpTrailingStep=100; // Trailing Stop distance (Points)
+
+input group ">>>> 5. General Settings"
 input QQ_BINARY_OPTION  InpPause=QQ_OPTION_OFF; // Start paused
 input QQ_LOT_MODE       InpLotsCalc=QQ_LOT_AUTOMATIC; // Lot sizing mode
 input QQ_RISK_LEVEL     InpAutoLotsValue=QQ_RISK_MEDIUM; // Automatic lot risk level
 input double            InpLotsFixed=0.01; // Fixed Lot
 input double            InpLotsFixedBalance=500.0; // Fixed per balance unit
-input int               InpOrdersMax=20; // Max Total Orders
+input int               InpOrdersMaxTotal=100; // Max Total Orders Across Entire Account
 input QQ_DD_MODE        InpDDMode=QQ_DD_OFF; // Drawdown control mode
 input double            InpDDValue=0.0; // Drawdown threshold
 input QQ_BINARY_OPTION  InpMQID=QQ_OPTION_OFF; // MQID push notifications
@@ -115,7 +135,7 @@ input int               InpSlippage=100; // Max slippage (points)
 input string            InpTradeCommentRaw="QQ_ST_"; // Trade comment
 input QQ_DIRECTION_MODE InpTradingDirectionType=QQ_DIRECTION_PER_STRATEGY; // Trading direction type
 
-input group ">>>> 4. Presets & Strategies"
+input group ">>>> 6. Presets & Strategies"
 input QQ_PRESET         InpSets=QQ_PRESET_ICVT_HIGH; // Preset selection
 input QQ_BINARY_OPTION  InpS01Strategy=QQ_OPTION_ON; // Strategy 1
 input QQ_BINARY_OPTION  InpS02Strategy=QQ_OPTION_ON; // Strategy 2
@@ -130,7 +150,7 @@ input QQ_BINARY_OPTION  InpS10Strategy=QQ_OPTION_ON; // Strategy 10
 input QQ_BINARY_OPTION  InpS11Strategy=QQ_OPTION_OFF; // Strategy 11
 input QQ_BINARY_OPTION  InpS12Strategy=QQ_OPTION_ON; // Strategy 12
 
-input group ">>>> 5. Trading Schedule & Hours"
+input group ">>>> 7. Trading Schedule & Hours"
 input bool              InpUseHourFilter=false; // Use Original Hour Window Filter (False = Supertrend Controls)
 input bool              InpUseNfpFridayFilter=true; // No entries on NFP Friday
 input bool              InpTradingFridayNight=true; // Close trading Friday night
@@ -144,22 +164,14 @@ input bool              InpTradeOnFriday=true; // Trade on Friday
 input bool              InpTradeOnSaturday=true; // Trade on Saturday
 input bool              InpTradeOnSunday=true; // Trade on Sunday
 
-input group ">>>> 6. Risk & Profit Management"
-input int               InpStopLoss=300; // Stop Loss (points, 0=off)
-input int               InpTakeProfit=500; // Take Profit (points, 0=off)
-input int               InpBreakEvenStart=150; // Break-even activation (points profit, 0=off)
-input int               InpBreakEvenOffset=10; // Break-even offset (points above entry)
-input int               InpTrailingStart=200; // Trailing Stop activation (points profit, 0=off)
-input int               InpTrailingStep=100; // Trailing Stop distance (points)
-
-input group ">>>> 7. Panel & Display Settings"
+input group ">>>> 8. Panel & Display Settings"
 input QQ_BINARY_OPTION  InpPanel=QQ_OPTION_ON; // Show panel
 input string            InpFont="Trebuchet MS"; // Panel font
 input int               InpFontSize=8; // Font size
-input string            InpComment="Quantum Queen ST v4.4"; // Panel comment
+input string            InpComment="Quantum Queen ST v4.5"; // Panel comment
 
 //--- Constants & Variables
-static const string QQ_NAME="Quantum Queen ST v4.4";
+static const string QQ_NAME="Quantum Queen ST v4.5";
 static const string QQ_OVERVIEW="Supertrend & Smart Grid Enhanced Core";
 static const string QQ_PANEL_PREFIX="QQX_";
 #define QQ_STRATEGY_COUNT 12
@@ -171,6 +183,7 @@ bool     g_panel_collapsed=false;
 string   g_dialog_prefix="";
 bool     g_drawdown_triggered=false;
 datetime g_last_panel_update=0;
+datetime g_last_visual_tp_bar=0;
 long     g_last_bar_time[QQ_STRATEGY_COUNT];
 int      g_demarker_a[QQ_STRATEGY_COUNT];
 int      g_demarker_b[QQ_STRATEGY_COUNT];
@@ -708,7 +721,44 @@ void ApplyBreakEvenAndTrailing(const int slot)
   }
 
 //+------------------------------------------------------------------+
-//| Manage Strategy Positions (Grid Execution & Cut-Loss for Both)   |
+//| Check Visual Take Profit on Candle Close                         |
+//+------------------------------------------------------------------+
+void CheckVisualTakeProfit(const int slot, const double avg_price, const long pos_type, const int count)
+  {
+   if(InpTPMode!=QQ_TP_VISUAL_CANDLE && (InpTPMode!=QQ_TP_HYBRID && InpTPMode!=QQ_TP_BASKET_AVERAGE))
+      return;
+
+   datetime current_bar=iTime(_Symbol,InpVisualTP_TF,0);
+   if(current_bar==g_last_visual_tp_bar)
+      return;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,true);
+   if(CopyRates(_Symbol,InpVisualTP_TF,1,1,rates)<1)
+      return;
+
+   double last_close=rates[0].close;
+   double target_pts=(count>=2 && InpBasketTakeProfit>0) ? InpBasketTakeProfit : InpTakeProfit;
+   if(target_pts<=0) return;
+
+   double target_tp=(pos_type==POSITION_TYPE_BUY) ?
+                    NormalizeRecoveredPrice(avg_price + target_pts * _Point) :
+                    NormalizeRecoveredPrice(avg_price - target_pts * _Point);
+
+   bool visual_hit=(pos_type==POSITION_TYPE_BUY && last_close>=target_tp) ||
+                   (pos_type==POSITION_TYPE_SELL && last_close<=target_tp);
+
+   if(visual_hit)
+     {
+      PrintFormat("🎯 [Visual TP Hit] Strategy %d closed on bar close (Close: %.2f | Target TP: %.2f)",
+                  slot+1, last_close, target_tp);
+      CloseStrategy(slot, "Visual Candle-Close TP");
+      g_last_visual_tp_bar=current_bar;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Manage Strategy Positions (Grid Execution & Precise Cut-Loss)    |
 //+------------------------------------------------------------------+
 void ManageStrategy(const int slot)
   {
@@ -723,33 +773,41 @@ void ManageStrategy(const int slot)
    double step_dist = grid_step_pts * _Point;
 
    // -------------------------------------------------------------
-   // A. SMART ATR GRID RECOVERY MODE
+   // 1. Take Profit Management (Basket / Visual / Hard)
+   // -------------------------------------------------------------
+   // A. Basket Average TP
+   if(count>=2 && InpBasketTakeProfit>0 && (InpTPMode==QQ_TP_BASKET_AVERAGE || InpTPMode==QQ_TP_HYBRID || InpTPMode==QQ_TP_ORIGINAL_HARD))
+     {
+      double basket_tp = (pos_type==POSITION_TYPE_BUY) ?
+                         NormalizeRecoveredPrice(avg_price + InpBasketTakeProfit * _Point) :
+                         NormalizeRecoveredPrice(avg_price - InpBasketTakeProfit * _Point);
+
+      double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+      double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+
+      bool basket_tp_hit = (pos_type==POSITION_TYPE_BUY && bid>=basket_tp) ||
+                           (pos_type==POSITION_TYPE_SELL && ask<=basket_tp);
+
+      if(basket_tp_hit)
+        {
+         PrintFormat("🎯 [Basket TP] Strategy %d closed %d positions at target %.2f (Avg: %.2f)",
+                     slot+1, count, basket_tp, avg_price);
+         CloseStrategy(slot, "Basket Take Profit");
+         return;
+        }
+     }
+
+   // B. Visual Candle-Close TP
+   if(InpTPMode==QQ_TP_VISUAL_CANDLE)
+     {
+      CheckVisualTakeProfit(slot, avg_price, pos_type, count);
+     }
+
+   // -------------------------------------------------------------
+   // 2. Smart Recovery Grid & Accurate (MaxOrders + 1) Step Cut-Loss
    // -------------------------------------------------------------
    if(InpGridMode==QQ_GRID_SMART_ATR)
      {
-      // 1. Basket Take Profit Check (when count >= 2)
-      if(count>=2 && InpBasketTakeProfit>0)
-        {
-         double target_tp = (pos_type==POSITION_TYPE_BUY) ?
-                            NormalizeRecoveredPrice(avg_price + InpBasketTakeProfit * _Point) :
-                            NormalizeRecoveredPrice(avg_price - InpBasketTakeProfit * _Point);
-
-         double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-         double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-
-         bool basket_tp_hit = (pos_type==POSITION_TYPE_BUY && bid>=target_tp) ||
-                              (pos_type==POSITION_TYPE_SELL && ask<=target_tp);
-
-         if(basket_tp_hit)
-           {
-            PrintFormat("🎯 [Basket TP] Strategy %d closed %d positions at target %.2f (Avg: %.2f)",
-                        slot+1, count, target_tp, avg_price);
-            CloseStrategy(slot, "Basket Take Profit");
-            return;
-           }
-        }
-
-      // 2. Recovery Order Placement OR Hard (Max+1) Cut-Loss
       if(pos_type==POSITION_TYPE_BUY)
         {
          double next_trigger_price = latest_price - step_dist;
@@ -757,23 +815,29 @@ void ManageStrategy(const int slot)
 
          if(bid <= next_trigger_price)
            {
-            if(count <= InpMaxGridRecoveryOrders)
+            // Case A: Still within allowed MaxOrders -> Open Recovery Order #count
+            if(count < InpMaxOrders)
               {
                double rec_vol = CalculateVolume(count);
                double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
                g_trade.SetExpertMagicNumber(StrategyMagic(slot));
-               if(g_trade.Buy(rec_vol, _Symbol, ask, 0.0, 0.0, SafeComment(slot, count)))
+               
+               double sl_price = (InpStopLoss > 0) ? NormalizeRecoveredPrice(ask - InpStopLoss * _Point) : 0.0;
+               double tp_price = (InpTakeProfit > 0 && InpTPMode == QQ_TP_ORIGINAL_HARD) ? NormalizeRecoveredPrice(ask + InpTakeProfit * _Point) : 0.0;
+
+               if(g_trade.Buy(rec_vol, _Symbol, ask, sl_price, tp_price, SafeComment(slot, count)))
                  {
                   PrintFormat("🛡️ [Smart Grid] Opened Recovery BUY #%d for Strategy %d at %.2f (Step: %.1f pts)",
                               count, slot+1, ask, grid_step_pts);
                  }
               }
-            else // Reached (MaxRecoveryOrders + 1) Distance Step -> CUT LOSS!
+            // Case B: Already opened ALL InpMaxOrders -> Price dropped another step (MaxOrders + 1) -> CUT LOSS!
+            else if(count >= InpMaxOrders)
               {
                if(InpCutLossOnMaxStep)
                  {
-                  PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached Max (%d) + 1 step distance (%.2f <= %.2f) -> Closing all %d positions!",
-                              slot+1, InpMaxGridRecoveryOrders, bid, next_trigger_price, count);
+                  PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached MaxOrders (%d) + 1 step distance (%.2f <= %.2f) -> Closing all %d positions!",
+                              slot+1, InpMaxOrders, bid, next_trigger_price, count);
                   CloseStrategy(slot, "Max Step Cut-Loss");
                   return;
                  }
@@ -787,23 +851,29 @@ void ManageStrategy(const int slot)
 
          if(ask >= next_trigger_price)
            {
-            if(count <= InpMaxGridRecoveryOrders)
+            // Case A: Still within allowed MaxOrders -> Open Recovery Order #count
+            if(count < InpMaxOrders)
               {
                double rec_vol = CalculateVolume(count);
                double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
                g_trade.SetExpertMagicNumber(StrategyMagic(slot));
-               if(g_trade.Sell(rec_vol, _Symbol, bid, 0.0, 0.0, SafeComment(slot, count)))
+
+               double sl_price = (InpStopLoss > 0) ? NormalizeRecoveredPrice(bid + InpStopLoss * _Point) : 0.0;
+               double tp_price = (InpTakeProfit > 0 && InpTPMode == QQ_TP_ORIGINAL_HARD) ? NormalizeRecoveredPrice(bid - InpTakeProfit * _Point) : 0.0;
+
+               if(g_trade.Sell(rec_vol, _Symbol, bid, sl_price, tp_price, SafeComment(slot, count)))
                  {
                   PrintFormat("🛡️ [Smart Grid] Opened Recovery SELL #%d for Strategy %d at %.2f (Step: %.1f pts)",
                               count, slot+1, bid, grid_step_pts);
                  }
               }
-            else // Reached (MaxRecoveryOrders + 1) Distance Step -> CUT LOSS!
+            // Case B: Already opened ALL InpMaxOrders -> Price rallied another step (MaxOrders + 1) -> CUT LOSS!
+            else if(count >= InpMaxOrders)
               {
                if(InpCutLossOnMaxStep)
                  {
-                  PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached Max (%d) + 1 step distance (%.2f >= %.2f) -> Closing all %d positions!",
-                              slot+1, InpMaxGridRecoveryOrders, ask, next_trigger_price, count);
+                  PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached MaxOrders (%d) + 1 step distance (%.2f >= %.2f) -> Closing all %d positions!",
+                              slot+1, InpMaxOrders, ask, next_trigger_price, count);
                   CloseStrategy(slot, "Max Step Cut-Loss");
                   return;
                  }
@@ -813,32 +883,31 @@ void ManageStrategy(const int slot)
      }
 
    // -------------------------------------------------------------
-   // B. ORIGINAL PORTFOLIO GRID MODE (With Max+1 Cut-Loss Protection)
+   // 3. Original Portfolio Mode (Cut-Loss only when count >= InpMaxOrders)
    // -------------------------------------------------------------
    else if(InpGridMode==QQ_GRID_ORIGINAL)
      {
-      // Check Max+1 Cut-Loss for Original Mode
-      if(InpCutLossOnMaxStep && count>=InpMaxGridRecoveryOrders)
+      if(InpCutLossOnMaxStep && count >= InpMaxOrders)
         {
          double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
          double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
 
          if(pos_type==POSITION_TYPE_BUY && bid <= latest_price - step_dist)
            {
-            PrintFormat("🚨 [Original Cut-Loss] Strategy %d reached Max orders + 1 step distance -> Closing basket!", slot+1);
+            PrintFormat("🚨 [Original Cut-Loss] Strategy %d reached MaxOrders (%d) + 1 step distance -> Closing basket!", slot+1, InpMaxOrders);
             CloseStrategy(slot, "Original Grid Max Step Cut-Loss");
             return;
            }
          if(pos_type==POSITION_TYPE_SELL && ask >= latest_price + step_dist)
            {
-            PrintFormat("🚨 [Original Cut-Loss] Strategy %d reached Max orders + 1 step distance -> Closing basket!", slot+1);
+            PrintFormat("🚨 [Original Cut-Loss] Strategy %d reached MaxOrders (%d) + 1 step distance -> Closing basket!", slot+1, InpMaxOrders);
             CloseStrategy(slot, "Original Grid Max Step Cut-Loss");
             return;
            }
         }
      }
 
-   // Apply BreakEven and Trailing Stop for single orders or individual tickets
+   // Apply BreakEven and Trailing Stop (Only runs if InpBreakEvenStart > 0 or InpTrailingStart > 0)
    ApplyBreakEvenAndTrailing(slot);
   }
 
@@ -883,7 +952,7 @@ ENUM_TIMEFRAMES PrimaryTimeframe(const int slot)
 bool StrategyHourAllowed(const int slot,const int hour)
   {
    if(!InpUseHourFilter)
-      return true; // Supertrend controls trend direction when Hour Filter is off
+      return true;
 
    switch(slot)
      {
@@ -965,7 +1034,7 @@ void ProcessStrategy(const int slot)
      }
 
    if(StrategyPositionCount(slot)>0) return;
-   if(TotalOpenOrdersCount()>=InpOrdersMax) return;
+   if(TotalOpenOrdersCount()>=InpOrdersMaxTotal) return;
 
    double volume=CalculateVolume(0);
    if(volume<=0.0) return;
@@ -983,15 +1052,17 @@ void ProcessStrategy(const int slot)
    if(signal>0)
      {
       double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      if(InpStopLoss>0 && InpGridMode!=QQ_GRID_SMART_ATR) sl_price=NormalizeRecoveredPrice(ask-InpStopLoss*_Point);
-      if(InpTakeProfit>0 && InpGridMode!=QQ_GRID_SMART_ATR) tp_price=NormalizeRecoveredPrice(ask+InpTakeProfit*_Point);
+      if(InpStopLoss>0) sl_price=NormalizeRecoveredPrice(ask-InpStopLoss*_Point);
+      if(InpTakeProfit>0 && (InpTPMode==QQ_TP_ORIGINAL_HARD || InpTPMode==QQ_TP_HYBRID)) 
+         tp_price=NormalizeRecoveredPrice(ask+InpTakeProfit*_Point);
       opened=g_trade.Buy(volume,_Symbol,ask,sl_price,tp_price,SafeComment(slot));
      }
    else
      {
       double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      if(InpStopLoss>0 && InpGridMode!=QQ_GRID_SMART_ATR) sl_price=NormalizeRecoveredPrice(bid+InpStopLoss*_Point);
-      if(InpTakeProfit>0 && InpGridMode!=QQ_GRID_SMART_ATR) tp_price=NormalizeRecoveredPrice(bid-InpTakeProfit*_Point);
+      if(InpStopLoss>0) sl_price=NormalizeRecoveredPrice(bid+InpStopLoss*_Point);
+      if(InpTakeProfit>0 && (InpTPMode==QQ_TP_ORIGINAL_HARD || InpTPMode==QQ_TP_HYBRID)) 
+         tp_price=NormalizeRecoveredPrice(bid-InpTakeProfit*_Point);
       opened=g_trade.Sell(volume,_Symbol,bid,sl_price,tp_price,SafeComment(slot));
      }
 
@@ -1113,9 +1184,9 @@ void UpdatePanel()
    if(InpPanel!=QQ_OPTION_ON) return;
    double grid_step=GetGridStepPoints();
    SetPanelLine(0,StringFormat("Supertrend: %s (%.2f)", (g_current_st_trend==1 ? "BULLISH" : "BEARISH"), g_st_line));
-   SetPanelLine(1,StringFormat("Grid Mode: %s | Max Rec: %d | Step: %.1f pts",
+   SetPanelLine(1,StringFormat("Grid: %s | MaxOrders: %d | Step: %.1f pts",
                                (InpGridMode==QQ_GRID_SMART_ATR ? "Smart ATR" : "Original"),
-                               InpMaxGridRecoveryOrders, grid_step));
+                               InpMaxOrders, grid_step));
    SetPanelLine(2,StringFormat("Balance: %.2f | Equity: %.2f | Open Orders: %d",
                                AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY), TotalOpenOrdersCount()));
    SetPanelLine(3,StringFormat("Floating P/L: %.2f %s", TotalStrategyProfit(), AccountInfoString(ACCOUNT_CURRENCY)));
@@ -1187,6 +1258,7 @@ int OnInit()
   {
    ArrayInitialize(g_last_bar_time,0);
    g_paused=(InpPause==QQ_OPTION_ON);
+   g_last_visual_tp_bar=0;
    g_trade.SetAsyncMode(false);
    g_trade.SetTypeFillingBySymbol(_Symbol);
 
@@ -1200,7 +1272,7 @@ int OnInit()
       CreatePanel();
 
    EventSetTimer(1);
-   Print("Quantum Queen Supertrend Edition initialized successfully.");
+   Print("Quantum Queen Supertrend Edition v4.5 initialized successfully.");
    return INIT_SUCCEEDED;
   }
 
