@@ -18,6 +18,8 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── ORC_Crypto_Ichimoku_H4_EA.mq5
 │   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
 │   └── XAUUSD_Advanced_Grid_EA.mq5
+├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
+│   └── Supertrend_DeMarker_StochRSI_Signal.pine
 ├── Scripts/                      # MQL5 Script source files (.mq5)
 │   └── ExportMultiData_M5.mq5
 ├── presets/                      # Parameter preset files (.set)
@@ -45,6 +47,11 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 | [`Experts/MACD_Martingale_Grid.mq5`](Experts/MACD_Martingale_Grid.mq5) | Grid / Multi-Asset | - |
 | [`Experts/ORC_Crypto_Ichimoku_H4_EA.mq5`](Experts/ORC_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | - |
 | [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | - |
+
+### Indicators (TradingView / Pine Script)
+| File | Platform | Description |
+| :--- | :--- | :--- |
+| [`Indicators/Supertrend_DeMarker_StochRSI_Signal.pine`](Indicators/Supertrend_DeMarker_StochRSI_Signal.pine) | TradingView (Pine Script v5) | Supertrend Main Trend + DeMarker & Stoch RSI Entry with 10-bar cooldown filter |
 
 ### Scripts
 | File | Description |

@@ -1,0 +1,85 @@
+//@version=5
+indicator("Supertrend + DeMarker + Stoch RSI Signal", overlay=true)
+
+// =============================================================================
+// 1. INPUT SETTINGS
+// =============================================================================
+// Supertrend Settings
+atrPeriod       = input.int(10, "Supertrend ATR Period", group="1. Supertrend (Main Trend)")
+atrMultiplier   = input.float(3.0, "Supertrend Multiplier", step=0.1, group="1. Supertrend (Main Trend)")
+
+// DeMarker Settings
+demPeriod       = input.int(14, "DeMarker Period", group="2. DeMarker")
+demOversold     = input.float(0.3, "DeMarker Oversold Level", step=0.05, group="2. DeMarker")
+demOverbought   = input.float(0.7, "DeMarker Overbought Level", step=0.05, group="2. DeMarker")
+
+// Stochastic RSI Settings
+rsiLength       = input.int(14, "RSI Length", group="3. Stoch RSI")
+stochLength     = input.int(14, "Stoch Length", group="3. Stoch RSI")
+smoothK         = input.int(3, "Smooth K", group="3. Stoch RSI")
+smoothD         = input.int(3, "Smooth D", group="3. Stoch RSI")
+stochOversold   = input.float(25.0, "Stoch RSI Oversold Zone", group="3. Stoch RSI")
+stochOverbought = input.float(75.0, "Stoch RSI Overbought Zone", group="3. Stoch RSI")
+
+// Signal Spacing Filter
+minBarsBetweenSignals = input.int(10, "Min Distance Between Signals (Bars)", minval=1, group="4. Filters")
+
+// =============================================================================
+// 2. INDICATOR CALCULATIONS
+// =============================================================================
+// 2.1 Supertrend
+[stValue, stDirection] = ta.supertrend(atrMultiplier, atrPeriod)
+isUptrend   = stDirection < 0
+isDowntrend = stDirection > 0
+
+// 2.2 DeMarker (DeM = avg(DeMax) / (avg(DeMax) + avg(DeMin)))
+deMax = high > high[1] ? high - high[1] : 0.0
+deMin = low < low[1] ? low[1] - low : 0.0
+avgDeMax = ta.sma(deMax, demPeriod)
+avgDeMin = ta.sma(deMin, demPeriod)
+demValue = (avgDeMax + avgDeMin) != 0 ? avgDeMax / (avgDeMax + avgDeMin) : 0.5
+
+// 2.3 Stochastic RSI
+rsiVal = ta.rsi(close, rsiLength)
+stochRsi = ta.stoch(rsiVal, rsiVal, rsiVal, stochLength)
+k = ta.sma(stochRsi, smoothK)
+d = ta.sma(k, smoothD)
+
+// =============================================================================
+// 3. SIGNAL LOGIC
+// =============================================================================
+// เงื่อนไข Buy: เทรนด์หลักขึ้น + Stoch RSI ตัดขึ้นในโซนต่ำ + DeMarker อยู่ใน/เพิ่งออกจากโซน Oversold
+stochBuyCross = ta.crossover(k, d) and (k <= stochOversold or k[1] <= stochOversold)
+demBuyCond    = demValue <= demOversold or demValue[1] <= demOversold or ta.crossover(demValue, demOversold)
+rawBuySignal  = isUptrend and stochBuyCross and demBuyCond
+
+// เงื่อนไข Sell: เทรนด์หลักลง + Stoch RSI ตัดลงในโซนสูง + DeMarker อยู่ใน/เพิ่งออกจากโซน Overbought
+stochSellCross = ta.crossunder(k, d) and (k >= stochOverbought or k[1] >= stochOverbought)
+demSellCond    = demValue >= demOverbought or demValue[1] >= demOverbought or ta.crossunder(demValue, demOverbought)
+rawSellSignal  = isDowntrend and stochSellCross and demSellCond
+
+// =============================================================================
+// 4. COOLDOWN FILTER (เว้นระยะห่างขั้นต่ำตามที่กำหนด)
+// =============================================================================
+var int lastSignalBar = -100
+
+validBuy  = rawBuySignal and (bar_index - lastSignalBar >= minBarsBetweenSignals)
+validSell = rawSellSignal and (bar_index - lastSignalBar >= minBarsBetweenSignals)
+
+if validBuy or validSell
+    lastSignalBar := bar_index
+
+// =============================================================================
+// 5. PLOTTING & ALERTS
+// =============================================================================
+// วาดเส้น Supertrend บนกราฟ
+plot(isUptrend ? stValue : na, "Supertrend Uptrend", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(isDowntrend ? stValue : na, "Supertrend Downtrend", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+
+// วาดลูกศรและป้ายสัญญาณ
+plotshape(validBuy, title="BUY Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="BUY", textcolor=color.white)
+plotshape(validSell, title="SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SELL", textcolor=color.white)
+
+// Alert Conditions สำหรับตั้งค่าการแจ้งเตือน
+alertcondition(validBuy, title="Buy Signal Alert", message="[BUY] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
+alertcondition(validSell, title="Sell Signal Alert", message="[SELL] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
