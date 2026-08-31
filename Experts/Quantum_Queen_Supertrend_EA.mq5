@@ -5,9 +5,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, My-Expert-Advisor"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.10"
+#property version   "1.20"
 #property description "Quantum Queen X Multi-Strategy Engine integrated with Supertrend Trend Filter"
-#property description "Features Visual / Candle-Close Take Profit, Dynamic Break-Even, Trailing Stop & Drawdown Protection"
+#property description "Features Smart Recovery Grid (Dynamic ATR Spacing & Hard Max+1 Step Cut-Loss), Visual TP & BE/Trailing"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -70,27 +70,36 @@ input string            InpTradeComment      = "QQ_ST_";           // Order Comm
 
 input group ">>>> 3. Money Management"
 input ENUM_LOT_MODE     InpLotMode           = LOT_MODE_FIXED;     // Lot Sizing Mode
-input double            InpFixedLot          = 0.01;               // Fixed Lot Size
+input double            InpFixedLot          = 0.01;               // Initial Fixed Lot Size
 input double            InpLotPerBalanceUnit = 1000.0;             // Balance per 0.01 lot (for Fixed per Balance)
 input double            InpRiskPercent       = 1.0;                // Risk % per Trade (for Auto Risk)
-input int               InpMaxOpenPositions  = 10;                 // Max Total Open Positions
+input int               InpMaxOpenPositions  = 20;                 // Max Total Open Positions (Across all slots)
 
-input group ">>>> 4. Quantum Profit & Risk Management (Visual TP / SL / Trail / BE)"
+input group ">>>> 4. Smart Recovery Grid (ATR Spacing & Hard Cut-Loss)"
+input bool              InpUseSmartGrid      = true;               // Enable Smart Recovery Grid
+input int               InpMaxRecoveryOrders = 2;                  // Max Recovery Orders Allowed (Default: 2)
+input double            InpGridAtrMultiplier = 1.0;                // Grid Step ATR Multiplier
+input double            InpGridBaseDistance  = 200.0;              // Grid Base Distance (Points)
+input double            InpGridLotMultiplier = 1.2;                // Lot Multiplier for Recovery Orders (1.0 = equal lot)
+input int               InpBasketTakeProfit  = 250;                // Basket Take Profit (Points above Avg Price)
+input bool              InpCutLossOnMaxStep  = true;               // Cut-Loss Immediately if price reaches Max+1 Step
+
+input group ">>>> 5. Single Trade Profit & Risk Management (TP / SL / Trail / BE)"
 input bool              InpUseVirtualTP      = true;               // Use Visual / Candle-Close Take Profit (QQ Style)
 input ENUM_TIMEFRAMES   InpVirtualTP_TF      = PERIOD_CURRENT;     // Candle-Close Evaluation Timeframe
-input bool              InpDrawVisualLines   = true;               // Draw Visual TP Lines on Chart
-input int               InpTakeProfit        = 500;                // Take Profit Distance (Points, 0=Disabled)
-input int               InpStopLoss          = 300;                // Stop Loss (Points, 0=Disabled)
+input bool              InpDrawVisualLines   = true;               // Draw Visual TP & Grid Lines on Chart
+input int               InpTakeProfit        = 500;                // Single Order Take Profit (Points, 0=Disabled)
+input int               InpStopLoss          = 300;                // Single Order Stop Loss (Points, 0=Disabled if Grid ON)
 input int               InpBreakEvenStart    = 150;                // Break-Even Activation (Points profit, 0=Off)
 input int               InpBreakEvenOffset   = 10;                 // Break-Even Lock Profit (Points above entry)
 input int               InpTrailingStart     = 200;                // Trailing Stop Activation (Points profit, 0=Off)
 input int               InpTrailingStep      = 100;                // Trailing Stop Distance (Points)
 
-input group ">>>> 5. Account Drawdown Protection"
+input group ">>>> 6. Account Drawdown Protection"
 input ENUM_DD_MODE      InpDDMode            = DD_OFF;             // Drawdown Protection Mode
 input double            InpDDThreshold       = 10.0;               // Drawdown Threshold (% or $)
 
-input group ">>>> 6. Custom Strategy Toggles (If Preset = Custom)"
+input group ">>>> 7. Custom Strategy Toggles (If Preset = Custom)"
 input bool              InpS01 = true;   // S01: M6(18) + M15(16) [BUY]
 input bool              InpS02 = true;   // S02: M15(14) + M20(20) [BUY]
 input bool              InpS03 = true;   // S03: M15(26) + M15(24) [BUY]
@@ -200,20 +209,17 @@ double NormalizeLot(double lot)
 //+------------------------------------------------------------------+
 //| Calculate Trade Volume                                           |
 //+------------------------------------------------------------------+
-double CalculateOrderVolume()
+double CalculateOrderVolume(const int order_level = 0)
   {
-   if(InpLotMode == LOT_MODE_FIXED)
-      return NormalizeLot(InpFixedLot);
+   double base_lot = InpFixedLot;
 
    if(InpLotMode == LOT_MODE_FIXED_PER_BALANCE)
      {
       double balance = g_acc.Balance();
       double unit    = MathMax(100.0, InpLotPerBalanceUnit);
-      double lots    = (balance / unit) * 0.01;
-      return NormalizeLot(lots);
+      base_lot       = (balance / unit) * 0.01;
      }
-
-   if(InpLotMode == LOT_MODE_AUTO_RISK)
+   else if(InpLotMode == LOT_MODE_AUTO_RISK)
      {
       double balance     = g_acc.Balance();
       double risk_amount = balance * (InpRiskPercent / 100.0);
@@ -226,11 +232,30 @@ double CalculateOrderVolume()
         {
          double loss_per_lot = (sl_points * point / tick_size) * tick_value;
          if(loss_per_lot > 0)
-            return NormalizeLot(risk_amount / loss_per_lot);
+            base_lot = risk_amount / loss_per_lot;
         }
      }
 
-   return NormalizeLot(InpFixedLot);
+   // Apply Recovery Order Lot Multiplier
+   if(order_level > 0 && InpGridLotMultiplier > 1.0)
+      base_lot = base_lot * MathPow(InpGridLotMultiplier, order_level);
+
+   return NormalizeLot(base_lot);
+  }
+
+//+------------------------------------------------------------------+
+//| Calculate Dynamic Grid Step (Points) = (ATR * Mult) + Base Dist  |
+//+------------------------------------------------------------------+
+double GetGridStepPoints()
+  {
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(g_handle_atr, 0, 0, 1, atr) < 1)
+      return InpGridBaseDistance;
+
+   double atr_points = (atr[0] / g_sym.Point());
+   double step = (atr_points * InpGridAtrMultiplier) + InpGridBaseDistance;
+   return MathMax(step, InpGridBaseDistance);
   }
 
 //+------------------------------------------------------------------+
@@ -374,15 +399,196 @@ int EvaluateDeMarkerSignal(const int slot)
   }
 
 //+------------------------------------------------------------------+
-//| Quantum Visual / Candle-Close Take Profit Evaluation             |
-//| (Closes ONLY when completed candle CLOSES beyond Virtual TP)     |
+//| Helper: Get Basket Stats for Strategy Slot                       |
+//+------------------------------------------------------------------+
+int GetStrategyBasketStats(const int slot, double &avg_price, double &total_vol, double &latest_price, long &pos_type)
+  {
+   int count = 0;
+   double weighted_sum = 0.0;
+   total_vol = 0.0;
+   avg_price = 0.0;
+   latest_price = 0.0;
+   datetime latest_time = 0;
+   pos_type = -1;
+
+   string slot_prefix = StringFormat("%sS%d", InpTradeComment, slot + 1);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() != InpMagicNumber || g_pos.Symbol() != _Symbol) continue;
+
+      string comment = g_pos.Comment();
+      if(StringFind(comment, slot_prefix) == 0)
+        {
+         count++;
+         double vol = g_pos.Volume();
+         double price = g_pos.PriceOpen();
+         pos_type = g_pos.PositionType();
+
+         weighted_sum += price * vol;
+         total_vol += vol;
+
+         if(g_pos.Time() >= latest_time)
+           {
+            latest_time = g_pos.Time();
+            latest_price = price;
+           }
+        }
+     }
+
+   if(total_vol > 0.0)
+      avg_price = weighted_sum / total_vol;
+
+   return count;
+  }
+
+//+------------------------------------------------------------------+
+//| Close Basket for Specific Strategy Slot                          |
+//+------------------------------------------------------------------+
+void CloseStrategyBasket(const int slot, const string reason)
+  {
+   string slot_prefix = StringFormat("%sS%d", InpTradeComment, slot + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() == InpMagicNumber && g_pos.Symbol() == _Symbol)
+        {
+         if(StringFind(g_pos.Comment(), slot_prefix) == 0)
+           {
+            g_trade.PositionClose(g_pos.Ticket());
+           }
+        }
+     }
+   PrintFormat("[Basket Close] Strategy %d closed. Reason: %s", slot + 1, reason);
+  }
+
+//+------------------------------------------------------------------+
+//| Smart Recovery Grid Logic & Hard Cut-Loss Execution              |
+//+------------------------------------------------------------------+
+void ProcessSmartRecoveryGrid(const int slot)
+  {
+   if(!InpUseSmartGrid)
+      return;
+
+   double avg_price = 0.0, total_vol = 0.0, latest_price = 0.0;
+   long pos_type = -1;
+   int count = GetStrategyBasketStats(slot, avg_price, total_vol, latest_price, pos_type);
+
+   if(count <= 0)
+      return;
+
+   double grid_step_pts = GetGridStepPoints();
+   double step_dist     = grid_step_pts * g_sym.Point();
+
+   // 1. Check Take Profit for Basket (when count >= 2) or Single Visual TP (count == 1)
+   if(count >= 2)
+     {
+      double basket_tp = (pos_type == POSITION_TYPE_BUY) ?
+                         (avg_price + InpBasketTakeProfit * g_sym.Point()) :
+                         (avg_price - InpBasketTakeProfit * g_sym.Point());
+
+      bool tp_reached = false;
+      if(InpUseVirtualTP)
+        {
+         datetime current_tp_bar = iTime(_Symbol, InpVirtualTP_TF, 0);
+         if(current_tp_bar != g_last_tp_bar_time)
+           {
+            MqlRates rates[];
+            ArraySetAsSeries(rates, true);
+            if(CopyRates(_Symbol, InpVirtualTP_TF, 1, 1, rates) >= 1)
+              {
+               if(pos_type == POSITION_TYPE_BUY && rates[0].close >= basket_tp) tp_reached = true;
+               if(pos_type == POSITION_TYPE_SELL && rates[0].close <= basket_tp) tp_reached = true;
+              }
+           }
+        }
+      else
+        {
+         if(pos_type == POSITION_TYPE_BUY && g_sym.Bid() >= basket_tp) tp_reached = true;
+         if(pos_type == POSITION_TYPE_SELL && g_sym.Ask() <= basket_tp) tp_reached = true;
+        }
+
+      if(tp_reached)
+        {
+         PrintFormat("🎯 [Basket TP Reached] Strategy %d closed all %d orders! Avg: %.2f TP: %.2f",
+                     slot + 1, count, avg_price, basket_tp);
+         CloseStrategyBasket(slot, "Basket Take Profit");
+         return;
+        }
+     }
+
+   // 2. Recovery Order Placement OR Hard Cut-Loss at (Max + 1) Step
+   if(pos_type == POSITION_TYPE_BUY)
+     {
+      double next_grid_price = latest_price - step_dist;
+      if(g_sym.Bid() <= next_grid_price)
+        {
+         // If we still haven't exceeded allowed recovery orders (e.g. initial=1, recovery 1, recovery 2)
+         // count == 1 (open rec #1), count == 2 (open rec #2 -> total 3 orders)
+         if(count <= InpMaxRecoveryOrders)
+           {
+            double rec_volume = CalculateOrderVolume(count);
+            if(rec_volume > 0.0)
+              {
+               string comment = StringFormat("%sS%d_R%d", InpTradeComment, slot + 1, count);
+               if(g_trade.Buy(rec_volume, _Symbol, g_sym.Ask(), 0.0, 0.0, comment))
+                 {
+                  PrintFormat("🛡️ [Smart Grid] Opened Recovery BUY #%d for Strategy %d | Lot: %.2f | Step: %.1f pts",
+                              count, slot + 1, rec_volume, grid_step_pts);
+                 }
+              }
+           }
+         else // Reached (MaxRecoveryOrders + 1) Step -> CUT LOSS!
+           {
+            if(InpCutLossOnMaxStep)
+              {
+               PrintFormat("🚨 [Grid Cut-Loss] Strategy %d exceeded Max %d recovery orders at step distance (%.2f <= %.2f) -> Hard Cut-Loss executed!",
+                           slot + 1, InpMaxRecoveryOrders, g_sym.Bid(), next_grid_price);
+               CloseStrategyBasket(slot, "Max Step Cut-Loss");
+              }
+           }
+        }
+     }
+   else if(pos_type == POSITION_TYPE_SELL)
+     {
+      double next_grid_price = latest_price + step_dist;
+      if(g_sym.Ask() >= next_grid_price)
+        {
+         if(count <= InpMaxRecoveryOrders)
+           {
+            double rec_volume = CalculateOrderVolume(count);
+            if(rec_volume > 0.0)
+              {
+               string comment = StringFormat("%sS%d_R%d", InpTradeComment, slot + 1, count);
+               if(g_trade.Sell(rec_volume, _Symbol, g_sym.Bid(), 0.0, 0.0, comment))
+                 {
+                  PrintFormat("🛡️ [Smart Grid] Opened Recovery SELL #%d for Strategy %d | Lot: %.2f | Step: %.1f pts",
+                              count, slot + 1, rec_volume, grid_step_pts);
+                 }
+              }
+           }
+         else // Reached (MaxRecoveryOrders + 1) Step -> CUT LOSS!
+           {
+            if(InpCutLossOnMaxStep)
+              {
+               PrintFormat("🚨 [Grid Cut-Loss] Strategy %d exceeded Max %d recovery orders at step distance (%.2f >= %.2f) -> Hard Cut-Loss executed!",
+                           slot + 1, InpMaxRecoveryOrders, g_sym.Ask(), next_grid_price);
+               CloseStrategyBasket(slot, "Max Step Cut-Loss");
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Single Position Visual Take Profit Check                         |
 //+------------------------------------------------------------------+
 void CheckQuantumVisualTakeProfit()
   {
    if(!InpUseVirtualTP || InpTakeProfit <= 0)
       return;
 
-   // Evaluate on completed candle close
    datetime current_tp_bar = iTime(_Symbol, InpVirtualTP_TF, 0);
    if(current_tp_bar == g_last_tp_bar_time)
       return;
@@ -404,25 +610,24 @@ void CheckQuantumVisualTakeProfit()
       long   type       = g_pos.PositionType();
       double open_price = g_pos.PriceOpen();
 
+      // Only evaluate standalone single positions here; baskets handled in ProcessSmartRecoveryGrid
       if(type == POSITION_TYPE_BUY)
         {
          double virtual_tp = open_price + InpTakeProfit * point;
-         // BUY TP Trigger: Completed bar closed AT OR ABOVE Virtual TP level
          if(last_close >= virtual_tp)
            {
-            PrintFormat("🎯 [Visual TP Triggered] BUY #%I64u Closed on Candle Close! Bar Close: %.2f >= TP Target: %.2f (Profit: +%.2f pts)",
-                        ticket, last_close, virtual_tp, (last_close - open_price) / point);
+            PrintFormat("🎯 [Visual TP Triggered] BUY #%I64u Closed on Candle Close! Bar Close: %.2f >= TP Target: %.2f",
+                        ticket, last_close, virtual_tp);
             g_trade.PositionClose(ticket);
            }
         }
       else if(type == POSITION_TYPE_SELL)
         {
          double virtual_tp = open_price - InpTakeProfit * point;
-         // SELL TP Trigger: Completed bar closed AT OR BELOW Virtual TP level
          if(last_close <= virtual_tp)
            {
-            PrintFormat("🎯 [Visual TP Triggered] SELL #%I64u Closed on Candle Close! Bar Close: %.2f <= TP Target: %.2f (Profit: +%.2f pts)",
-                        ticket, last_close, virtual_tp, (open_price - last_close) / point);
+            PrintFormat("🎯 [Visual TP Triggered] SELL #%I64u Closed on Candle Close! Bar Close: %.2f <= TP Target: %.2f",
+                        ticket, last_close, virtual_tp);
             g_trade.PositionClose(ticket);
            }
         }
@@ -514,7 +719,7 @@ void ApplyQuantumPositionManagement()
 //+------------------------------------------------------------------+
 void UpdateVisualLines()
   {
-   if(!InpDrawVisualLines || !InpUseVirtualTP)
+   if(!InpDrawVisualLines)
       return;
 
    // Clean up orphan lines
@@ -638,19 +843,22 @@ int CountOpenPositions()
 //+------------------------------------------------------------------+
 void DrawDashboard()
   {
-   string text = StringFormat("--- QUANTUM QUEEN X + SUPERTREND EA ---\n"
+   double grid_step = GetGridStepPoints();
+   string text = StringFormat("--- QUANTUM QUEEN X + SUPERTREND EA v1.20 ---\n"
                               "Supertrend: %s (%.2f)\n"
                               "Open Positions: %d / %d\n"
                               "Account Equity: $%.2f | Balance: $%.2f\n"
                               "Preset: %s\n"
-                              "Direction Mode: %s\n"
+                              "Smart Grid: %s (Max %d Rec Orders | Step: %.1f pts)\n"
+                              "Grid Cut-Loss: %s (Close on Max+1 Step)\n"
                               "Visual TP Mode: %s (Candle-Close Beyond TP)\n"
                               "Trailing Stop: %s (%d pts) | BE: %s (%d pts)",
                               (g_current_st_trend == 1 ? "BULLISH (UP)" : "BEARISH (DOWN)"), g_st_line,
                               CountOpenPositions(), InpMaxOpenPositions,
                               g_acc.Equity(), g_acc.Balance(),
                               EnumToString(InpPreset),
-                              EnumToString(InpDirectionMode),
+                              (InpUseSmartGrid ? "ENABLED" : "OFF"), InpMaxRecoveryOrders, grid_step,
+                              (InpCutLossOnMaxStep ? "ENABLED" : "OFF"),
                               (InpUseVirtualTP ? "ENABLED" : "HARD BROKER TP"),
                               (InpTrailingStart > 0 ? "ON" : "OFF"), InpTrailingStep,
                               (InpBreakEvenStart > 0 ? "ON" : "OFF"), InpBreakEvenStart);
@@ -715,28 +923,32 @@ void OnTick()
    // 2. Update Supertrend Direction
    UpdateSupertrend();
 
-   // 3. Evaluate Quantum Visual / Candle-Close Take Profit
+   // 3. Process Smart Recovery Grid & Basket TP / Cut-Loss for each Strategy Slot
+   for(int slot = 0; slot < STRATEGY_COUNT; slot++)
+      ProcessSmartRecoveryGrid(slot);
+
+   // 4. Evaluate Quantum Visual Take Profit for standalone single positions
    CheckQuantumVisualTakeProfit();
 
-   // 4. Apply Multi-Stage Position Management (Break-Even & Trailing Stop)
+   // 5. Apply Multi-Stage Position Management (Break-Even & Trailing Stop)
    ApplyQuantumPositionManagement();
 
-   // 5. Update Visual TP Lines on Chart
+   // 6. Update Visual TP Lines on Chart
    UpdateVisualLines();
 
-   // 6. Update Dashboard
+   // 7. Update Dashboard
    DrawDashboard();
 
-   // 7. Check Spread
+   // 8. Check Spread
    double spread = (g_sym.Ask() - g_sym.Bid()) / g_sym.Point();
    if(spread > InpMaxSpread)
       return;
 
-   // 8. Check Max Positions
+   // 9. Check Max Total Positions Across All Slots
    if(CountOpenPositions() >= InpMaxOpenPositions)
       return;
 
-   // 9. Check Cooldown between entries
+   // 10. Check Cooldown between initial signal entries
    datetime current_bar = iTime(_Symbol, _Period, 0);
    if(InpMinBarsCooldown > 0 && g_last_signal_time > 0)
      {
@@ -745,10 +957,15 @@ void OnTick()
          return;
      }
 
-   // 10. Process 12 Quantum Queen Strategies
+   // 11. Process Initial Entry Signals for 12 Quantum Queen Strategies
    for(int slot = 0; slot < STRATEGY_COUNT; slot++)
      {
       if(!IsStrategyEnabled(slot))
+         continue;
+
+      // If this strategy already has open positions, let Smart Grid handle it
+      double avg_p=0, tot_v=0, lat_p=0; long p_type=-1;
+      if(GetStrategyBasketStats(slot, avg_p, tot_v, lat_p, p_type) > 0)
          continue;
 
       int sig = EvaluateDeMarkerSignal(slot);
@@ -768,8 +985,8 @@ void OnTick()
             continue; // Block Sell if Supertrend is not Bearish
         }
 
-      // Calculate Order Parameters
-      double volume = CalculateOrderVolume();
+      // Calculate Initial Order Volume
+      double volume = CalculateOrderVolume(0);
       if(volume <= 0.0)
          continue;
 
@@ -778,37 +995,38 @@ void OnTick()
       double point    = g_sym.Point();
       int    digits   = g_sym.Digits();
 
-      // If Visual TP is enabled, do NOT set hard broker TP
-      if(!InpUseVirtualTP && InpTakeProfit > 0)
+      // If Grid is OFF and Visual TP is OFF, set hard broker TP/SL
+      if(!InpUseSmartGrid && !InpUseVirtualTP && InpTakeProfit > 0)
         {
          if(sig == 1) tp_price = NormalizeDouble(g_sym.Ask() + InpTakeProfit * point, digits);
          if(sig == -1) tp_price = NormalizeDouble(g_sym.Bid() - InpTakeProfit * point, digits);
         }
 
+      // Hard Stop Loss only if Grid is disabled (Grid uses dynamic step cut-loss instead)
+      if(!InpUseSmartGrid && InpStopLoss > 0)
+        {
+         if(sig == 1) sl_price = NormalizeDouble(g_sym.Ask() - InpStopLoss * point, digits);
+         if(sig == -1) sl_price = NormalizeDouble(g_sym.Bid() + InpStopLoss * point, digits);
+        }
+
       string comment = StringFormat("%sS%d", InpTradeComment, slot + 1);
 
-      if(sig == 1) // BUY Entry
+      if(sig == 1) // BUY Initial Entry
         {
          double ask = g_sym.Ask();
-         if(InpStopLoss > 0) sl_price = NormalizeDouble(ask - InpStopLoss * point, digits);
-
          if(g_trade.Buy(volume, _Symbol, ask, sl_price, tp_price, comment))
            {
-            PrintFormat("Quantum Queen BUY executed! [Strategy %d] Lot: %.2f (Visual TP Target: %.2f) SL: %.2f",
-                        slot + 1, volume, ask + InpTakeProfit * point, sl_price);
+            PrintFormat("Quantum Queen Initial BUY! [Strategy %d] Lot: %.2f TP: %.2f", slot + 1, volume, ask + InpTakeProfit * point);
             g_last_signal_time = current_bar;
             break;
            }
         }
-      else if(sig == -1) // SELL Entry
+      else if(sig == -1) // SELL Initial Entry
         {
          double bid = g_sym.Bid();
-         if(InpStopLoss > 0) sl_price = NormalizeDouble(bid + InpStopLoss * point, digits);
-
          if(g_trade.Sell(volume, _Symbol, bid, sl_price, tp_price, comment))
            {
-            PrintFormat("Quantum Queen SELL executed! [Strategy %d] Lot: %.2f (Visual TP Target: %.2f) SL: %.2f",
-                        slot + 1, volume, bid - InpTakeProfit * point, sl_price);
+            PrintFormat("Quantum Queen Initial SELL! [Strategy %d] Lot: %.2f TP: %.2f", slot + 1, volume, bid - InpTakeProfit * point);
             g_last_signal_time = current_bar;
             break;
            }
