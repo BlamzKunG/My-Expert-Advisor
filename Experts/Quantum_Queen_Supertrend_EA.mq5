@@ -116,6 +116,7 @@ int            g_demarker_a[STRATEGY_COUNT];
 int            g_demarker_b[STRATEGY_COUNT];
 datetime       g_last_signal_time = 0;
 datetime       g_last_tp_bar_time = 0;
+datetime       g_last_bar_time[STRATEGY_COUNT];
 int            g_current_st_trend = 0; // 1 = Bullish, -1 = Bearish
 double         g_st_line = 0.0;
 
