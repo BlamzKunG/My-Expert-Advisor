@@ -5,9 +5,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, My-Expert-Advisor"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.00"
+#property version   "1.10"
 #property description "Quantum Queen X Multi-Strategy Engine integrated with Supertrend Trend Filter"
-#property description "Features Dynamic Break-Even, Multi-Stage Trailing Stop, Drawdown Protection & Supertrend Filter"
+#property description "Features Visual / Candle-Close Take Profit, Dynamic Break-Even, Trailing Stop & Drawdown Protection"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -75,9 +75,12 @@ input double            InpLotPerBalanceUnit = 1000.0;             // Balance pe
 input double            InpRiskPercent       = 1.0;                // Risk % per Trade (for Auto Risk)
 input int               InpMaxOpenPositions  = 10;                 // Max Total Open Positions
 
-input group ">>>> 4. Quantum Profit & Risk Management (TP / SL / Trail / BE)"
+input group ">>>> 4. Quantum Profit & Risk Management (Visual TP / SL / Trail / BE)"
+input bool              InpUseVirtualTP      = true;               // Use Visual / Candle-Close Take Profit (QQ Style)
+input ENUM_TIMEFRAMES   InpVirtualTP_TF      = PERIOD_CURRENT;     // Candle-Close Evaluation Timeframe
+input bool              InpDrawVisualLines   = true;               // Draw Visual TP Lines on Chart
+input int               InpTakeProfit        = 500;                // Take Profit Distance (Points, 0=Disabled)
 input int               InpStopLoss          = 300;                // Stop Loss (Points, 0=Disabled)
-input int               InpTakeProfit        = 500;                // Take Profit (Points, 0=Disabled)
 input int               InpBreakEvenStart    = 150;                // Break-Even Activation (Points profit, 0=Off)
 input int               InpBreakEvenOffset   = 10;                 // Break-Even Lock Profit (Points above entry)
 input int               InpTrailingStart     = 200;                // Trailing Stop Activation (Points profit, 0=Off)
@@ -112,7 +115,7 @@ int            g_handle_atr = INVALID_HANDLE;
 int            g_demarker_a[STRATEGY_COUNT];
 int            g_demarker_b[STRATEGY_COUNT];
 datetime       g_last_signal_time = 0;
-datetime       g_last_bar_time[STRATEGY_COUNT];
+datetime       g_last_tp_bar_time = 0;
 int            g_current_st_trend = 0; // 1 = Bullish, -1 = Bearish
 double         g_st_line = 0.0;
 
@@ -370,6 +373,64 @@ int EvaluateDeMarkerSignal(const int slot)
   }
 
 //+------------------------------------------------------------------+
+//| Quantum Visual / Candle-Close Take Profit Evaluation             |
+//| (Closes ONLY when completed candle CLOSES beyond Virtual TP)     |
+//+------------------------------------------------------------------+
+void CheckQuantumVisualTakeProfit()
+  {
+   if(!InpUseVirtualTP || InpTakeProfit <= 0)
+      return;
+
+   // Evaluate on completed candle close
+   datetime current_tp_bar = iTime(_Symbol, InpVirtualTP_TF, 0);
+   if(current_tp_bar == g_last_tp_bar_time)
+      return;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   if(CopyRates(_Symbol, InpVirtualTP_TF, 1, 1, rates) < 1)
+      return;
+
+   double last_close = rates[0].close;
+   double point      = g_sym.Point();
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() != InpMagicNumber || g_pos.Symbol() != _Symbol) continue;
+
+      ulong  ticket     = g_pos.Ticket();
+      long   type       = g_pos.PositionType();
+      double open_price = g_pos.PriceOpen();
+
+      if(type == POSITION_TYPE_BUY)
+        {
+         double virtual_tp = open_price + InpTakeProfit * point;
+         // BUY TP Trigger: Completed bar closed AT OR ABOVE Virtual TP level
+         if(last_close >= virtual_tp)
+           {
+            PrintFormat("🎯 [Visual TP Triggered] BUY #%I64u Closed on Candle Close! Bar Close: %.2f >= TP Target: %.2f (Profit: +%.2f pts)",
+                        ticket, last_close, virtual_tp, (last_close - open_price) / point);
+            g_trade.PositionClose(ticket);
+           }
+        }
+      else if(type == POSITION_TYPE_SELL)
+        {
+         double virtual_tp = open_price - InpTakeProfit * point;
+         // SELL TP Trigger: Completed bar closed AT OR BELOW Virtual TP level
+         if(last_close <= virtual_tp)
+           {
+            PrintFormat("🎯 [Visual TP Triggered] SELL #%I64u Closed on Candle Close! Bar Close: %.2f <= TP Target: %.2f (Profit: +%.2f pts)",
+                        ticket, last_close, virtual_tp, (open_price - last_close) / point);
+            g_trade.PositionClose(ticket);
+           }
+        }
+     }
+
+   g_last_tp_bar_time = current_tp_bar;
+  }
+
+//+------------------------------------------------------------------+
 //| Multi-Stage Position Management (Break-Even & Trailing Stop)     |
 //+------------------------------------------------------------------+
 void ApplyQuantumPositionManagement()
@@ -443,6 +504,53 @@ void ApplyQuantumPositionManagement()
          g_trade.SetExpertMagicNumber(InpMagicNumber);
          if(!g_trade.PositionModify(ticket, new_sl, current_tp))
             PrintFormat("Quantum BE/Trail Modify Failed! Ticket #%I64u Error: %d", ticket, GetLastError());
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Manage Visual TP Lines on Chart                                  |
+//+------------------------------------------------------------------+
+void UpdateVisualLines()
+  {
+   if(!InpDrawVisualLines || !InpUseVirtualTP)
+      return;
+
+   // Clean up orphan lines
+   for(int i = ObjectsTotal(0, 0, OBJ_HLINE) - 1; i >= 0; i--)
+     {
+      string obj_name = ObjectName(0, i, 0, OBJ_HLINE);
+      if(StringFind(obj_name, "QQ_VTP_") == 0)
+        {
+         ulong ticket = (ulong)StringToInteger(StringSubstr(obj_name, 7));
+         if(!PositionSelectByTicket(ticket))
+            ObjectDelete(0, obj_name);
+        }
+     }
+
+   // Render active Visual TP lines
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() != InpMagicNumber || g_pos.Symbol() != _Symbol) continue;
+
+      ulong ticket = g_pos.Ticket();
+      string obj_name = "QQ_VTP_" + (string)ticket;
+      double open_price = g_pos.PriceOpen();
+      double vtp = 0.0;
+
+      if(g_pos.PositionType() == POSITION_TYPE_BUY)
+         vtp = open_price + InpTakeProfit * g_sym.Point();
+      else
+         vtp = open_price - InpTakeProfit * g_sym.Point();
+
+      if(ObjectFind(0, obj_name) < 0)
+        {
+         ObjectCreate(0, obj_name, OBJ_HLINE, 0, 0, vtp);
+         ObjectSetInteger(0, obj_name, OBJPROP_COLOR, (g_pos.PositionType() == POSITION_TYPE_BUY ? clrMediumSeaGreen : clrCrimson));
+         ObjectSetInteger(0, obj_name, OBJPROP_STYLE, STYLE_DASHDOT);
+         ObjectSetInteger(0, obj_name, OBJPROP_WIDTH, 1);
+         ObjectSetString(0, obj_name, OBJPROP_TEXT, StringFormat("Visual TP #%I64u (Close Beyond)", ticket));
         }
      }
   }
@@ -529,19 +637,20 @@ int CountOpenPositions()
 //+------------------------------------------------------------------+
 void DrawDashboard()
   {
-   string name = "QQ_ST_DASHBOARD";
    string text = StringFormat("--- QUANTUM QUEEN X + SUPERTREND EA ---\n"
                               "Supertrend: %s (%.2f)\n"
                               "Open Positions: %d / %d\n"
                               "Account Equity: $%.2f | Balance: $%.2f\n"
                               "Preset: %s\n"
                               "Direction Mode: %s\n"
+                              "Visual TP Mode: %s (Candle-Close Beyond TP)\n"
                               "Trailing Stop: %s (%d pts) | BE: %s (%d pts)",
                               (g_current_st_trend == 1 ? "BULLISH (UP)" : "BEARISH (DOWN)"), g_st_line,
                               CountOpenPositions(), InpMaxOpenPositions,
                               g_acc.Equity(), g_acc.Balance(),
                               EnumToString(InpPreset),
                               EnumToString(InpDirectionMode),
+                              (InpUseVirtualTP ? "ENABLED" : "HARD BROKER TP"),
                               (InpTrailingStart > 0 ? "ON" : "OFF"), InpTrailingStep,
                               (InpBreakEvenStart > 0 ? "ON" : "OFF"), InpBreakEvenStart);
 
@@ -567,6 +676,7 @@ int OnInit()
       return INIT_FAILED;
 
    ArrayInitialize(g_last_bar_time, 0);
+   g_last_tp_bar_time = 0;
    Print("Quantum Queen X + Supertrend EA successfully initialized.");
    return INIT_SUCCEEDED;
   }
@@ -587,6 +697,7 @@ void OnDeinit(const int reason)
          IndicatorRelease(g_demarker_b[i]);
      }
 
+   ObjectsDeleteAll(0, "QQ_VTP_");
    Comment("");
   }
 
@@ -603,22 +714,28 @@ void OnTick()
    // 2. Update Supertrend Direction
    UpdateSupertrend();
 
-   // 3. Apply Multi-Stage Position Management (Break-Even & Trailing Stop)
+   // 3. Evaluate Quantum Visual / Candle-Close Take Profit
+   CheckQuantumVisualTakeProfit();
+
+   // 4. Apply Multi-Stage Position Management (Break-Even & Trailing Stop)
    ApplyQuantumPositionManagement();
 
-   // 4. Update Dashboard
+   // 5. Update Visual TP Lines on Chart
+   UpdateVisualLines();
+
+   // 6. Update Dashboard
    DrawDashboard();
 
-   // 5. Check Spread
+   // 7. Check Spread
    double spread = (g_sym.Ask() - g_sym.Bid()) / g_sym.Point();
    if(spread > InpMaxSpread)
       return;
 
-   // 6. Check Max Positions
+   // 8. Check Max Positions
    if(CountOpenPositions() >= InpMaxOpenPositions)
       return;
 
-   // 7. Check Cooldown between entries
+   // 9. Check Cooldown between entries
    datetime current_bar = iTime(_Symbol, _Period, 0);
    if(InpMinBarsCooldown > 0 && g_last_signal_time > 0)
      {
@@ -627,7 +744,7 @@ void OnTick()
          return;
      }
 
-   // 8. Process 12 Quantum Queen Strategies
+   // 10. Process 12 Quantum Queen Strategies
    for(int slot = 0; slot < STRATEGY_COUNT; slot++)
      {
       if(!IsStrategyEnabled(slot))
@@ -660,18 +777,24 @@ void OnTick()
       double point    = g_sym.Point();
       int    digits   = g_sym.Digits();
 
+      // If Visual TP is enabled, do NOT set hard broker TP
+      if(!InpUseVirtualTP && InpTakeProfit > 0)
+        {
+         if(sig == 1) tp_price = NormalizeDouble(g_sym.Ask() + InpTakeProfit * point, digits);
+         if(sig == -1) tp_price = NormalizeDouble(g_sym.Bid() - InpTakeProfit * point, digits);
+        }
+
       string comment = StringFormat("%sS%d", InpTradeComment, slot + 1);
 
       if(sig == 1) // BUY Entry
         {
          double ask = g_sym.Ask();
-         if(InpStopLoss > 0)   sl_price = NormalizeDouble(ask - InpStopLoss * point, digits);
-         if(InpTakeProfit > 0) tp_price = NormalizeDouble(ask + InpTakeProfit * point, digits);
+         if(InpStopLoss > 0) sl_price = NormalizeDouble(ask - InpStopLoss * point, digits);
 
          if(g_trade.Buy(volume, _Symbol, ask, sl_price, tp_price, comment))
            {
-            PrintFormat("Quantum Queen BUY executed! [Strategy %d] Lot: %.2f TP: %.2f SL: %.2f",
-                        slot + 1, volume, tp_price, sl_price);
+            PrintFormat("Quantum Queen BUY executed! [Strategy %d] Lot: %.2f (Visual TP Target: %.2f) SL: %.2f",
+                        slot + 1, volume, ask + InpTakeProfit * point, sl_price);
             g_last_signal_time = current_bar;
             break;
            }
@@ -679,13 +802,12 @@ void OnTick()
       else if(sig == -1) // SELL Entry
         {
          double bid = g_sym.Bid();
-         if(InpStopLoss > 0)   sl_price = NormalizeDouble(bid + InpStopLoss * point, digits);
-         if(InpTakeProfit > 0) tp_price = NormalizeDouble(bid - InpTakeProfit * point, digits);
+         if(InpStopLoss > 0) sl_price = NormalizeDouble(bid + InpStopLoss * point, digits);
 
          if(g_trade.Sell(volume, _Symbol, bid, sl_price, tp_price, comment))
            {
-            PrintFormat("Quantum Queen SELL executed! [Strategy %d] Lot: %.2f TP: %.2f SL: %.2f",
-                        slot + 1, volume, tp_price, sl_price);
+            PrintFormat("Quantum Queen SELL executed! [Strategy %d] Lot: %.2f (Visual TP Target: %.2f) SL: %.2f",
+                        slot + 1, volume, bid - InpTakeProfit * point, sl_price);
             g_last_signal_time = current_bar;
             break;
            }
