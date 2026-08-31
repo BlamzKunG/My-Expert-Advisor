@@ -4,7 +4,7 @@
 //|                                       https://www.mql5.com       |
 //+------------------------------------------------------------------+
 #property copyright "Quantum Queen X (Supertrend & Smart Grid Edition)"
-#property version   "V4.4"
+#property version   "4.40"
 #property description "Quantum Queen X Core with Supertrend Trend Filter & Smart ATR Recovery Grid"
 #property strict 
 
@@ -162,7 +162,7 @@ input string            InpComment="Quantum Queen ST v4.4"; // Panel comment
 static const string QQ_NAME="Quantum Queen ST v4.4";
 static const string QQ_OVERVIEW="Supertrend & Smart Grid Enhanced Core";
 static const string QQ_PANEL_PREFIX="QQX_";
-static const int    QQ_STRATEGY_COUNT=12;
+#define QQ_STRATEGY_COUNT 12
 
 CTrade   g_trade;
 bool     g_paused=false;
