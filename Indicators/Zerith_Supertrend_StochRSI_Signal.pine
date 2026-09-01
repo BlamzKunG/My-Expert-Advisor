@@ -1,12 +1,12 @@
 //@version=6
-indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", overlay=true)
+indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", overlay=true, max_bars_back=500)
 
 // =============================================================================
 // 1. MASTER TREND FILTER CONFIGURATION
 // =============================================================================
 grp_trend = "1. Master Trend Filter Settings"
 useTrendFilter      = input.bool(true, "Enable Master Trend Filter", group=grp_trend)
-trendMode           = input.string("Supertrend (Custom TF)", "Trend Filter Engine", options=["Supertrend (Custom TF)", "Higher Timeframe (HTF) Supertrend", "EMA Baseline (e.g. EMA 200)", "Dual Supertrend (Chart + HTF)", "None (Raw Reversal Mode)"], group=grp_trend)
+trendMode           = input.string("Supertrend (Chart/Custom TF)", "Trend Filter Engine", options=["Supertrend (Chart/Custom TF)", "Higher Timeframe (HTF) Supertrend", "EMA Baseline (e.g. EMA 200)", "Dual Supertrend (Chart + HTF)", "None (Raw Reversal Mode)"], group=grp_trend)
 
 // 1.1 Base Supertrend
 stTimeframe         = input.timeframe("", "Supertrend Timeframe (Empty = Chart TF)", group=grp_trend)
@@ -20,7 +20,7 @@ htfAtrMult          = input.float(3.0, "HTF Multiplier", step=0.1, group=grp_tre
 
 // 1.3 EMA Baseline Filter
 useEmaTrend         = input.bool(false, "Enable 200 EMA Baseline Filter", group=grp_trend)
-emaTimeframe        = input.timeframe("", "EMA Baseline Timeframe", group=grp_trend)
+emaTimeframe        = input.timeframe("", "EMA Baseline Timeframe (Empty = Chart TF)", group=grp_trend)
 emaLength           = input.int(200, "EMA Baseline Length", group=grp_trend)
 
 // =============================================================================
@@ -94,15 +94,34 @@ plotEmaBaseline     = input.bool(true, "Plot EMA Baseline Line", group=grp_ui)
 plotDonchianLevels  = input.bool(false, "Plot Donchian S/R Levels", group=grp_ui)
 
 // =============================================================================
-// 6. MULTI-TIMEFRAME COMPUTATIONS (SECURITY WRAPPERS)
+// 6. HIGH-PERFORMANCE NATIVE / MTF ENGINE (ZERO-LAG COMPUTATIONS)
 // =============================================================================
-// 6.1 Multi-Timeframe Supertrend Calculation
+// Helper Functions
 calcSupertrend(float mult, int len) =>
     ta.supertrend(mult, len)
 
-[raw_stVal, raw_stDir] = request.security(syminfo.tickerid, stTimeframe == "" ? timeframe.period : stTimeframe, calcSupertrend(atrMultiplier, atrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
-stIsBull = raw_stDir < 0
-stIsBear = raw_stDir > 0
+calcDeMarker(int len) =>
+    dMax = high > high[1] ? high - high[1] : 0.0
+    dMin = low < low[1] ? low[1] - low : 0.0
+    avgMax = ta.sma(dMax, len)
+    avgMin = ta.sma(dMin, len)
+    (avgMax + avgMin) != 0 ? avgMax / (avgMax + avgMin) : 0.5
+
+calcStochRsi(int rLen, int sLen, int kSmooth, int dSmooth) =>
+    rVal = ta.rsi(close, rLen)
+    stVal = ta.stoch(rVal, rVal, rVal, sLen)
+    _k = ta.sma(stVal, kSmooth)
+    _d = ta.sma(_k, dSmooth)
+    [_k, _d]
+
+// 6.1 Base Supertrend (Direct Local Calculation for Chart TF to eliminate zoom delay)
+[local_stVal, local_stDir] = ta.supertrend(atrMultiplier, atrPeriod)
+[sec_stVal, sec_stDir] = request.security(syminfo.tickerid, stTimeframe != "" ? stTimeframe : timeframe.period, calcSupertrend(atrMultiplier, atrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+stVal = (stTimeframe == "" or stTimeframe == timeframe.period) ? local_stVal : sec_stVal
+stDir = (stTimeframe == "" or stTimeframe == timeframe.period) ? local_stDir : sec_stDir
+stIsBull = stDir < 0
+stIsBear = stDir > 0
 
 // 6.2 Higher Timeframe Supertrend
 [raw_htfVal, raw_htfDir] = request.security(syminfo.tickerid, htfTimeframe, calcSupertrend(htfAtrMult, htfAtrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
@@ -110,8 +129,9 @@ htfIsBull = raw_htfDir < 0
 htfIsBear = raw_htfDir > 0
 
 // 6.3 EMA Baseline Calculation
-calcEma(int len) => ta.ema(close, len)
-raw_emaBaseline = request.security(syminfo.tickerid, emaTimeframe == "" ? timeframe.period : emaTimeframe, calcEma(emaLength), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+local_ema = ta.ema(close, emaLength)
+sec_ema = request.security(syminfo.tickerid, emaTimeframe != "" ? emaTimeframe : timeframe.period, ta.ema(close, emaLength), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+raw_emaBaseline = (emaTimeframe == "" or emaTimeframe == timeframe.period) ? local_ema : sec_ema
 emaIsBull = close >= raw_emaBaseline
 emaIsBear = close <= raw_emaBaseline
 
@@ -120,7 +140,7 @@ bool trendAllowsBuy  = true
 bool trendAllowsSell = true
 
 if useTrendFilter
-    if trendMode == "Supertrend (Custom TF)"
+    if trendMode == "Supertrend (Chart/Custom TF)"
         trendAllowsBuy  := stIsBull
         trendAllowsSell := stIsBear
     else if trendMode == "Higher Timeframe (HTF) Supertrend"
@@ -141,27 +161,27 @@ if useEmaTrend and trendMode != "EMA Baseline (e.g. EMA 200)"
     trendAllowsSell := trendAllowsSell and emaIsBear
 
 // =============================================================================
-// 7. DEMARKER & STOCHASTIC RSI (MULTI-TF CALCULATION)
+// 7. DEMARKER & STOCHASTIC RSI (NATIVE ZERO-LAG WRAPPER)
 // =============================================================================
-// 7.1 DeMarker Function
-calcDeMarker(int len) =>
-    dMax = high > high[1] ? high - high[1] : 0.0
-    dMin = low < low[1] ? low[1] - low : 0.0
-    avgMax = ta.sma(dMax, len)
-    avgMin = ta.sma(dMin, len)
-    (avgMax + avgMin) != 0 ? avgMax / (avgMax + avgMin) : 0.5
+// 7.1 DeMarker
+local_dMax = high > high[1] ? high - high[1] : 0.0
+local_dMin = low < low[1] ? low[1] - low : 0.0
+local_avgMax = ta.sma(local_dMax, demPeriod)
+local_avgMin = ta.sma(local_dMin, demPeriod)
+local_demValue = (local_avgMax + local_avgMin) != 0 ? local_avgMax / (local_avgMax + local_avgMin) : 0.5
 
-demValue = request.security(syminfo.tickerid, demTimeframe == "" ? timeframe.period : demTimeframe, calcDeMarker(demPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sec_demValue = request.security(syminfo.tickerid, demTimeframe != "" ? demTimeframe : timeframe.period, calcDeMarker(demPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+demValue = (demTimeframe == "" or demTimeframe == timeframe.period) ? local_demValue : sec_demValue
 
-// 7.2 Stoch RSI Function
-calcStochRsi(int rLen, int sLen, int kSmooth, int dSmooth) =>
-    rVal = ta.rsi(close, rLen)
-    stVal = ta.stoch(rVal, rVal, rVal, sLen)
-    _k = ta.sma(stVal, kSmooth)
-    _d = ta.sma(_k, dSmooth)
-    [_k, _d]
+// 7.2 Stoch RSI
+local_rsi = ta.rsi(close, rsiLength)
+local_stoch = ta.stoch(local_rsi, local_rsi, local_rsi, stochLength)
+local_k = ta.sma(local_stoch, smoothK)
+local_d = ta.sma(local_k, smoothD)
 
-[kVal, dVal] = request.security(syminfo.tickerid, stochTimeframe == "" ? timeframe.period : stochTimeframe, calcStochRsi(rsiLength, stochLength, smoothK, smoothD), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+[sec_k, sec_d] = request.security(syminfo.tickerid, stochTimeframe != "" ? stochTimeframe : timeframe.period, calcStochRsi(rsiLength, stochLength, smoothK, smoothD), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+kVal = (stochTimeframe == "" or stochTimeframe == timeframe.period) ? local_k : sec_k
+dVal = (stochTimeframe == "" or stochTimeframe == timeframe.period) ? local_d : sec_d
 
 // =============================================================================
 // 8. STRUCTURAL & ANTI-SIDEWAY FILTERS
@@ -210,9 +230,9 @@ allFilters_Buy  = passDonchian_Buy and passVolume and passER and passChop and pa
 allFilters_Sell = passDonchian_Sell and passVolume and passER and passChop and passBBW and passEMA
 
 // =============================================================================
-// 9. ENTRY SIGNAL EVALUATION (GLOBAL STATE EVALUATIONS)
+// 9. ENTRY SIGNAL EVALUATION
 // =============================================================================
-// Global Crossover / Crossunder calculations (to prevent CW10002 warning)
+// Global Crossover / Crossunder Calculations (Evaluated every bar)
 stochBuyCross   = ta.crossover(kVal, dVal)
 stochSellCross  = ta.crossunder(kVal, dVal)
 demBuyCross     = ta.crossover(demValue, demOversold)
@@ -251,11 +271,11 @@ if finalBuy or finalSell
     lastSignalBar := bar_index
 
 // =============================================================================
-// 10. PLOTTING & VISUALIZATION
+// 10. PLOTTING & VISUALIZATION (SEAMLESS REAL-TIME RENDERING)
 // =============================================================================
-// Supertrend Line
-plot(plotSupertrendLine and stIsBull ? raw_stVal : na, "Supertrend Bullish", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
-plot(plotSupertrendLine and stIsBear ? raw_stVal : na, "Supertrend Bearish", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+// Supertrend Line (Smooth single plot with dynamic color to prevent zoom glitch)
+stColor = stIsBull ? color.green : color.red
+plot(plotSupertrendLine ? stVal : na, "Supertrend Line", color=stColor, linewidth=2)
 
 // EMA Baseline Line
 plot(plotEmaBaseline and useEmaTrend ? raw_emaBaseline : na, "200 EMA Baseline", color=color.new(color.yellow, 30), linewidth=2)
