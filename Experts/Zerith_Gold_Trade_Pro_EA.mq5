@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Zerith Series / Wim Schrynemakers Architecture"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.32"
+#property version   "1.33"
 #property description "Zerith Gold Trade Pro MT5 - Multi-Strategy Daily Support & Resistance Breakout on Gold"
 #property description "Pure Price Action Swing High/Low Breakout with Dynamic Trailing Stop & Drawdown Protection"
 #property strict
@@ -61,7 +61,7 @@ input bool              InpRunStrat6            = true;                 // Strat
 input bool              InpRunStrat7            = true;                 // Strategy 7 (Long-Term Structural Breakout)
 input ulong             InpBaseMagicNumber      = 880000;               // Base Magic Number (880001 - 880007)
 input string            InpTradeCommentPrefix   = "Zerith_GoldPro";     // Trade Comment Prefix
-input int               InpPendingExpiryHours   = 24;                   // Default Pending Order Lifetime (Hours, 0=Module Def)
+input int               InpPendingExpiryHours   = 24;                   // Default Pending Order Lifetime (Hours)
 
 input group ">>>> 3. Drawdown & Capital Protection (DD Protection)"
 input bool              InpEnableDDProtection         = true;           // Enable Drawdown & Capital Protection
@@ -86,7 +86,7 @@ SStrategyConfig g_strategies[7];
 
 // DD Protection Tracking
 datetime       g_last_daily_reset_date    = 0;
-datetime       g_last_bar_time            = 0;
+datetime       g_last_scan_bar_time       = 0;
 bool           g_dd_protection_tripped    = false;
 double         g_current_floating_loss    = 0.0;
 double         g_current_floating_dd_pct  = 0.0;
@@ -264,6 +264,7 @@ void CloseAllPositionsAndOrders(string reason)
       if(g_pos.Symbol() == _Symbol && g_pos.Magic() >= InpBaseMagicNumber && g_pos.Magic() <= InpBaseMagicNumber + 7)
         {
          ulong ticket = g_pos.Ticket();
+         g_trade.SetExpertMagicNumber(g_pos.Magic());
          g_trade.PositionClose(ticket);
         }
      }
@@ -275,6 +276,7 @@ void CloseAllPositionsAndOrders(string reason)
       if(g_ord.Symbol() == _Symbol && g_ord.Magic() >= InpBaseMagicNumber && g_ord.Magic() <= InpBaseMagicNumber + 7)
         {
          ulong ticket = g_ord.Ticket();
+         g_trade.SetExpertMagicNumber(g_ord.Magic());
          g_trade.OrderDelete(ticket);
         }
      }
@@ -528,6 +530,7 @@ void HandleOCOAndCleanup(ulong magic)
          if(g_ord.Symbol() == _Symbol && g_ord.Magic() == magic)
            {
             ulong t = g_ord.Ticket();
+            g_trade.SetExpertMagicNumber(magic);
             g_trade.OrderDelete(t);
            }
         }
@@ -564,6 +567,8 @@ void ManageTrailingStops()
          double current_sl  = g_pos.StopLoss();
          double current_tp  = g_pos.TakeProfit();
          ENUM_POSITION_TYPE type = g_pos.PositionType();
+
+         g_trade.SetExpertMagicNumber(magic);
 
          if(type == POSITION_TYPE_BUY)
            {
@@ -645,6 +650,7 @@ void ExecuteDailyBreakoutStrategies()
       if(!g_strategies[s].enabled) continue;
 
       ulong magic = g_strategies[s].magic;
+      g_trade.SetExpertMagicNumber(magic);
 
       // If this strategy already has an active open position, perform OCO cleanup and skip
       if(HasOpenPosition(magic))
@@ -807,10 +813,10 @@ int OnInit()
    InitStrategies();
 
    g_last_daily_reset_date = 0;
-   g_last_bar_time         = 0;
+   g_last_scan_bar_time    = 0;
    g_dd_protection_tripped = false;
 
-   Print("Zerith Gold Trade Pro EA MT5 v1.32 successfully initialized.");
+   Print("Zerith Gold Trade Pro EA MT5 v1.33 successfully initialized.");
    return INIT_SUCCEEDED;
   }
 
@@ -829,17 +835,17 @@ void OnTick()
   {
    g_sym.RefreshRates();
 
-   // 1. Enforce Drawdown & Capital Protection
+   // 1. Enforce Drawdown & Capital Protection (Every tick)
    CheckAndEnforceDrawdownProtection();
 
    // 2. Manage Trailing Stop & Break-Even on Open Positions (Every tick)
    ManageTrailingStops();
 
-   // 3. Scan & Place Daily Swing High/Low Breakout Orders (Evaluated on new bar or state change)
-   datetime current_bar_time = iTime(_Symbol, PERIOD_M1, 0);
-   if(g_last_bar_time != current_bar_time)
+   // 3. Scan & Place Daily Swing High/Low Breakout Orders (Evaluated on hourly bar open or initial load)
+   datetime current_bar_time = iTime(_Symbol, PERIOD_H1, 0);
+   if(g_last_scan_bar_time != current_bar_time)
      {
-      g_last_bar_time = current_bar_time;
+      g_last_scan_bar_time = current_bar_time;
       ExecuteDailyBreakoutStrategies();
      }
 
