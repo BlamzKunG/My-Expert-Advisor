@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|                                   Zerith_Gold_Trade_Pro_EA.mq5   |
-//|               Zerith Series - Gold Daily Breakout Pro MT5        |
-//|                             https://www.mql5.com                 |
+//|                                     Zerith_Gold_Trade_Pro_EA.mq5 |
+//|                 Zerith Series / Wim Schrynemakers Architecture   |
+//|                 https://github.com/BlamzKunG/My-Expert-Advisor   |
 //+------------------------------------------------------------------+
 #property copyright "Zerith Series / Wim Schrynemakers Architecture"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.33"
-#property description "Zerith Gold Trade Pro MT5 - Multi-Strategy Daily Support & Resistance Breakout on Gold"
-#property description "Pure Price Action Swing High/Low Breakout with Dynamic Trailing Stop & Drawdown Protection"
+#property version   "1.34"
+#property description "Zerith Gold Trade Pro MT5 - Faithful Port of Gold Trade Pro v1.31"
+#property description "7-Strategy Daily Support & Resistance Breakout with Virtual Expiration & Trailing Stop"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -17,51 +17,27 @@
 #include <Trade\SymbolInfo.mqh>
 
 //--- Enums
-enum ENUM_LOT_MODE
-  {
-   LOT_MODE_FIXED=0,         // Fixed Lot Size
-   LOT_MODE_PER_BALANCE=1,   // Lot Per Balance Step (e.g. 0.01 per $600)
-   LOT_MODE_RISK_PERCENT=2   // Risk Percent Per Trade (Based on SL)
-  };
+enum ENUM_LOT_MODE { LOT_MODE_FIXED=0, LOT_MODE_PER_BALANCE=1, LOT_MODE_RISK_PERCENT=2 };
 
-//--- Sub-Strategy Configuration Struct
-struct SStrategyConfig
-  {
-   string   name;
-   bool     enabled;
-   ulong    magic;
-   int      left_bars;
-   int      right_bars;
-   int      max_lookback;
-   double   offset_points;
-   double   tp_points;
-   double   sl_points;
-   double   trail_start_points;
-   double   trail_dist_points;
-   double   trail_step_points;
-   int      expiry_hours;
-  };
-
-//--- Input Parameters
+//--- Inputs
 input group ">>>> 1. Money Management & Lot Sizing"
 input ENUM_LOT_MODE     InpLotMode              = LOT_MODE_PER_BALANCE; // Lot Sizing Method
-input double            InpStartLots            = 0.01;                 // Fixed Lot Size
+input double            InpStartLots            = 0.01;                 // Fixed Lot Size / Base Lot
 input double            InpLotPerBalanceStep    = 600.0;                // Balance Step for 0.01 Lot ($)
-input double            InpRiskPercent          = 1.5;                  // Risk % Per Trade (if Risk Mode)
+input double            InpRiskPercent          = 2.0;                  // Risk % Per Trade (if Risk Mode)
 input double            InpMaxSpreadPoints      = 500.0;                // Max Allowed Spread (Points, 500 = 50 pips)
 input int               InpSlippage             = 10;                   // Max Slippage (Points)
 
 input group ">>>> 2. Multi-Strategy Activation (7 Daily Breakout Modules)"
-input bool              InpRunStrat1            = true;                 // Strategy 1 (Fast Momentum Breakout)
-input bool              InpRunStrat2            = true;                 // Strategy 2 (Core Daily Breakout)
-input bool              InpRunStrat3            = true;                 // Strategy 3 (Medium Swing Breakout)
-input bool              InpRunStrat4            = true;                 // Strategy 4 (Major Resistance/Support)
-input bool              InpRunStrat5            = true;                 // Strategy 5 (Short-Cycle Breakout)
-input bool              InpRunStrat6            = true;                 // Strategy 6 (Volatility Swing Breakout)
-input bool              InpRunStrat7            = true;                 // Strategy 7 (Long-Term Structural Breakout)
-input ulong             InpBaseMagicNumber      = 880000;               // Base Magic Number (880001 - 880007)
-input string            InpTradeCommentPrefix   = "Zerith_GoldPro";     // Trade Comment Prefix
-input int               InpPendingExpiryHours   = 24;                   // Default Pending Order Lifetime (Hours)
+input bool              InpRunStratA            = true;                 // Strategy A (Run Strategy 1)
+input bool              InpRunStratC            = true;                 // Strategy C (Run Strategy 2)
+input bool              InpRunStratD            = true;                 // Strategy D (Run Strategy 3)
+input bool              InpRunStratE            = true;                 // Strategy E (Run Strategy 4)
+input bool              InpRunStratF            = true;                 // Strategy F (Run Strategy 5)
+input bool              InpRunStratG            = true;                 // Strategy G (Run Strategy 6)
+input bool              InpRunStratH            = true;                 // Strategy H (Run Strategy 7)
+input ulong             InpBaseMagicNumber      = 1000;                 // Base Magic Number (Original Default: 1000)
+input string            InpTradeCommentPrefix   = "Gold Trade Pro";     // Trade Comment Prefix
 
 input group ">>>> 3. Drawdown & Capital Protection (DD Protection)"
 input bool              InpEnableDDProtection         = true;           // Enable Drawdown & Capital Protection
@@ -71,670 +47,592 @@ input double            InpMaxDDMoney                 = 0.0;            // Max F
 input bool              InpCloseAllOnDDBreach         = true;           // Close All Positions & Orders on DD Breach
 input bool              InpPauseTradingAfterDDBreach  = true;           // Pause Trading for Remainder of Day on DD Breach
 
-input group ">>>> 4. Trailing Stop & Exit Execution"
-input bool              InpEnableTrailing             = true;           // Enable Dynamic Trailing Stop
-input bool              InpEnableBreakEven            = true;           // Enable Auto Break-Even
+input group ">>>> 4. Trailing Stop Execution"
+input bool              InpEnableTrailing             = true;           // Enable Trailing Stop Engine
 
-//--- Global Objects & Strategy Definitions
+//--- Global Objects & State
 CTrade         g_trade;
 CPositionInfo  g_pos;
-COrderInfo     g_ord;
-CAccountInfo   g_acc;
+COrderInfo     g_order;
+CAccountInfo   g_account;
 CSymbolInfo    g_sym;
 
-SStrategyConfig g_strategies[7];
+double         g_start_day_balance = 0.0;
+int            g_current_day       = -1;
+bool           g_trading_paused    = false;
 
-// DD Protection Tracking
-datetime       g_last_daily_reset_date    = 0;
-datetime       g_last_scan_bar_time       = 0;
-bool           g_dd_protection_tripped    = false;
-double         g_current_floating_loss    = 0.0;
-double         g_current_floating_dd_pct  = 0.0;
-double         g_today_realized_loss      = 0.0;
-double         g_today_total_loss_pct     = 0.0;
-
-//+------------------------------------------------------------------+
-//| Initialize Strategy Configurations                               |
-//+------------------------------------------------------------------+
-void InitStrategies()
+struct SStrategyConfig
   {
-   // Strategy 1 (Fast Momentum Breakout)
-   g_strategies[0].name               = "Strat_1_Fast";
-   g_strategies[0].enabled            = InpRunStrat1;
-   g_strategies[0].magic              = InpBaseMagicNumber + 1;
-   g_strategies[0].left_bars          = 4;
-   g_strategies[0].right_bars         = 2;
-   g_strategies[0].max_lookback       = 160;
-   g_strategies[0].offset_points      = 150.0;
-   g_strategies[0].tp_points          = 1300.0;
-   g_strategies[0].sl_points          = 1700.0;
-   g_strategies[0].trail_start_points = 800.0;
-   g_strategies[0].trail_dist_points  = 500.0;
-   g_strategies[0].trail_step_points  = 50.0;
-   g_strategies[0].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+   string   name;              // Strategy label
+   bool     enabled;           // From input
+   ulong    magic;             // BaseMagic + offset
+   int      left_bars;         // Fractal left bars
+   int      right_bars;        // Fractal right bars 
+   int      max_lookback;      // Max bars to scan
+   double   detect_offset;     // Min distance swing must be from price (in points)
+   double   buy_entry_offset;  // BuyStop offset from swing high (negative = below)
+   double   sell_entry_offset; // SellStop offset formula: swing_low - this*point
+   double   dup_tolerance;     // Tolerance for duplicate order detection (in points)
+   double   sl_points;         // Stop Loss distance from entry
+   double   tp_points;         // Take Profit distance from entry
+   double   trail_start;       // Trailing activation AND distance from price for new SL
+   double   trail_step;        // Min price movement from reference for trail activation
+   double   trail_cap;         // Max SL level relative to entry (cap)
+   int      expiry_hours;      // Virtual expiration hours
+  };
 
-   // Strategy 2 (Core Daily Breakout)
-   g_strategies[1].name               = "Strat_2_Core";
-   g_strategies[1].enabled            = InpRunStrat2;
-   g_strategies[1].magic              = InpBaseMagicNumber + 2;
-   g_strategies[1].left_bars          = 18;
-   g_strategies[1].right_bars         = 3;
-   g_strategies[1].max_lookback       = 180;
-   g_strategies[1].offset_points      = 900.0;
-   g_strategies[1].tp_points          = 1200.0;
-   g_strategies[1].sl_points          = 1800.0;
-   g_strategies[1].trail_start_points = 750.0;
-   g_strategies[1].trail_dist_points  = 600.0;
-   g_strategies[1].trail_step_points  = 50.0;
-   g_strategies[1].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+SStrategyConfig g_strats[7];
 
-   // Strategy 3 (Medium Swing Breakout)
-   g_strategies[2].name               = "Strat_3_Medium";
-   g_strategies[2].enabled            = InpRunStrat3;
-   g_strategies[2].magic              = InpBaseMagicNumber + 3;
-   g_strategies[2].left_bars          = 10;
-   g_strategies[2].right_bars         = 2;
-   g_strategies[2].max_lookback       = 120;
-   g_strategies[2].offset_points      = 300.0;
-   g_strategies[2].tp_points          = 1400.0;
-   g_strategies[2].sl_points          = 1600.0;
-   g_strategies[2].trail_start_points = 700.0;
-   g_strategies[2].trail_dist_points  = 500.0;
-   g_strategies[2].trail_step_points  = 50.0;
-   g_strategies[2].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+//+------------------------------------------------------------------+
+//| Initialization                                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   if(!g_sym.Name(_Symbol)) return(INIT_FAILED);
+   g_sym.Refresh();
+   
+   g_trade.SetExpertMagicNumber(InpBaseMagicNumber);
+   g_trade.SetDeviationInPoints(InpSlippage);
+   g_trade.SetMarginMode();
+   g_trade.SetTypeFillingBySymbol(_Symbol);
 
-   // Strategy 4 (Major Resistance/Support)
-   g_strategies[3].name               = "Strat_4_Major";
-   g_strategies[3].enabled            = InpRunStrat4;
-   g_strategies[3].magic              = InpBaseMagicNumber + 4;
-   g_strategies[3].left_bars          = 24;
-   g_strategies[3].right_bars         = 4;
-   g_strategies[3].max_lookback       = 200;
-   g_strategies[3].offset_points      = 1200.0;
-   g_strategies[3].tp_points          = 1500.0;
-   g_strategies[3].sl_points          = 2000.0;
-   g_strategies[3].trail_start_points = 900.0;
-   g_strategies[3].trail_dist_points  = 600.0;
-   g_strategies[3].trail_step_points  = 50.0;
-   g_strategies[3].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+   // Strategy A (Magic 1001)
+   g_strats[0].name              = "A";
+   g_strats[0].enabled           = InpRunStratA;
+   g_strats[0].magic             = InpBaseMagicNumber + 1;
+   g_strats[0].left_bars         = 4;
+   g_strats[0].right_bars        = 2;
+   g_strats[0].max_lookback      = 160;
+   g_strats[0].detect_offset     = 150.0;
+   g_strats[0].buy_entry_offset  = -140.0;
+   g_strats[0].sell_entry_offset = -290.0;
+   g_strats[0].dup_tolerance     = 680.0;
+   g_strats[0].expiry_hours      = 408;
+   g_strats[0].sl_points         = 1300.0;
+   g_strats[0].tp_points         = 1700.0;
+   g_strats[0].trail_start       = 800.0;
+   g_strats[0].trail_step        = 500.0;
+   g_strats[0].trail_cap         = 200.0;
 
-   // Strategy 5 (Short-Cycle Breakout)
-   g_strategies[4].name               = "Strat_5_Short";
-   g_strategies[4].enabled            = InpRunStrat5;
-   g_strategies[4].magic              = InpBaseMagicNumber + 5;
-   g_strategies[4].left_bars          = 6;
-   g_strategies[4].right_bars         = 2;
-   g_strategies[4].max_lookback       = 100;
-   g_strategies[4].offset_points      = 200.0;
-   g_strategies[4].tp_points          = 1100.0;
-   g_strategies[4].sl_points          = 1500.0;
-   g_strategies[4].trail_start_points = 600.0;
-   g_strategies[4].trail_dist_points  = 400.0;
-   g_strategies[4].trail_step_points  = 50.0;
-   g_strategies[4].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+   // Strategy C (Magic 1003)
+   g_strats[1].name              = "C";
+   g_strats[1].enabled           = InpRunStratC;
+   g_strats[1].magic             = InpBaseMagicNumber + 3;
+   g_strats[1].left_bars         = 18;
+   g_strats[1].right_bars        = 3;
+   g_strats[1].max_lookback      = 180;
+   g_strats[1].detect_offset     = 900.0;
+   g_strats[1].buy_entry_offset  = -130.0;
+   g_strats[1].sell_entry_offset = -30.0;
+   g_strats[1].dup_tolerance     = 980.0;
+   g_strats[1].expiry_hours      = 408;
+   g_strats[1].sl_points         = 1200.0;
+   g_strats[1].tp_points         = 1800.0;
+   g_strats[1].trail_start       = 750.0;
+   g_strats[1].trail_step        = 600.0;
+   g_strats[1].trail_cap         = 200.0;
 
-   // Strategy 6 (Volatility Swing Breakout)
-   g_strategies[5].name               = "Strat_6_Vol";
-   g_strategies[5].enabled            = InpRunStrat6;
-   g_strategies[5].magic              = InpBaseMagicNumber + 6;
-   g_strategies[5].left_bars          = 14;
-   g_strategies[5].right_bars         = 3;
-   g_strategies[5].max_lookback       = 150;
-   g_strategies[5].offset_points      = 600.0;
-   g_strategies[5].tp_points          = 1300.0;
-   g_strategies[5].sl_points          = 1900.0;
-   g_strategies[5].trail_start_points = 800.0;
-   g_strategies[5].trail_dist_points  = 550.0;
-   g_strategies[5].trail_step_points  = 50.0;
-   g_strategies[5].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+   // Strategy D (Magic 1004)
+   g_strats[2].name              = "D";
+   g_strats[2].enabled           = InpRunStratD;
+   g_strats[2].magic             = InpBaseMagicNumber + 4;
+   g_strats[2].left_bars         = 4;
+   g_strats[2].right_bars        = 2;
+   g_strats[2].max_lookback      = 240;
+   g_strats[2].detect_offset     = 900.0;
+   g_strats[2].buy_entry_offset  = -250.0;
+   g_strats[2].sell_entry_offset = -130.0;
+   g_strats[2].dup_tolerance     = 680.0;
+   g_strats[2].expiry_hours      = 48;
+   g_strats[2].sl_points         = 1300.0;
+   g_strats[2].tp_points         = 1700.0;
+   g_strats[2].trail_start       = 800.0;
+   g_strats[2].trail_step        = 500.0;
+   g_strats[2].trail_cap         = 200.0;
 
-   // Strategy 7 (Long-Term Structural Breakout)
-   g_strategies[6].name               = "Strat_7_Macro";
-   g_strategies[6].enabled            = InpRunStrat7;
-   g_strategies[6].magic              = InpBaseMagicNumber + 7;
-   g_strategies[6].left_bars          = 30;
-   g_strategies[6].right_bars         = 5;
-   g_strategies[6].max_lookback       = 250;
-   g_strategies[6].offset_points      = 1500.0;
-   g_strategies[6].tp_points          = 1800.0;
-   g_strategies[6].sl_points          = 2200.0;
-   g_strategies[6].trail_start_points = 1000.0;
-   g_strategies[6].trail_dist_points  = 700.0;
-   g_strategies[6].trail_step_points  = 50.0;
-   g_strategies[6].expiry_hours       = (InpPendingExpiryHours > 0) ? InpPendingExpiryHours : 24;
+   // Strategy E (Magic 1005)
+   g_strats[3].name              = "E";
+   g_strats[3].enabled           = InpRunStratE;
+   g_strats[3].magic             = InpBaseMagicNumber + 5;
+   g_strats[3].left_bars         = 15;
+   g_strats[3].right_bars        = 3;
+   g_strats[3].max_lookback      = 230;
+   g_strats[3].detect_offset     = 550.0;
+   g_strats[3].buy_entry_offset  = -170.0;
+   g_strats[3].sell_entry_offset = -70.0;
+   g_strats[3].dup_tolerance     = 480.0;
+   g_strats[3].expiry_hours      = 480;
+   g_strats[3].sl_points         = 600.0;
+   g_strats[3].tp_points         = 1700.0;
+   g_strats[3].trail_start       = 500.0;
+   g_strats[3].trail_step        = 300.0;
+   g_strats[3].trail_cap         = 200.0;
+
+   // Strategy F (Magic 1006)
+   g_strats[4].name              = "F";
+   g_strats[4].enabled           = InpRunStratF;
+   g_strats[4].magic             = InpBaseMagicNumber + 6;
+   g_strats[4].left_bars         = 12;
+   g_strats[4].right_bars        = 2;
+   g_strats[4].max_lookback      = 50;
+   g_strats[4].detect_offset     = 700.0;
+   g_strats[4].buy_entry_offset  = -210.0;
+   g_strats[4].sell_entry_offset = -60.0;
+   g_strats[4].dup_tolerance     = 30.0;
+   g_strats[4].expiry_hours      = 384;
+   g_strats[4].sl_points         = 1000.0;
+   g_strats[4].tp_points         = 1900.0;
+   g_strats[4].trail_start       = 600.0;
+   g_strats[4].trail_step        = 500.0;
+   g_strats[4].trail_cap         = 1000.0;
+
+   // Strategy G (Magic 1007)
+   g_strats[5].name              = "G";
+   g_strats[5].enabled           = InpRunStratG;
+   g_strats[5].magic             = InpBaseMagicNumber + 7;
+   g_strats[5].left_bars         = 17;
+   g_strats[5].right_bars        = 2;
+   g_strats[5].max_lookback      = 110;
+   g_strats[5].detect_offset     = 150.0;
+   g_strats[5].buy_entry_offset  = -40.0;
+   g_strats[5].sell_entry_offset = -140.0;
+   g_strats[5].dup_tolerance     = 280.0;
+   g_strats[5].expiry_hours      = 240;
+   g_strats[5].sl_points         = 1200.0;
+   g_strats[5].tp_points         = 1600.0;
+   g_strats[5].trail_start       = 600.0;
+   g_strats[5].trail_step        = 200.0;
+   g_strats[5].trail_cap         = 4400.0;
+
+   // Strategy H (Magic 1008)
+   g_strats[6].name              = "H";
+   g_strats[6].enabled           = InpRunStratH;
+   g_strats[6].magic             = InpBaseMagicNumber + 8;
+   g_strats[6].left_bars         = 7;
+   g_strats[6].right_bars        = 2;
+   g_strats[6].max_lookback      = 20;
+   g_strats[6].detect_offset     = 250.0;
+   g_strats[6].buy_entry_offset  = -130.0;
+   g_strats[6].sell_entry_offset = -120.0;
+   g_strats[6].dup_tolerance     = 980.0;
+   g_strats[6].expiry_hours      = 432;
+   g_strats[6].sl_points         = 600.0;
+   g_strats[6].tp_points         = 4900.0;
+   g_strats[6].trail_start       = 600.0;
+   g_strats[6].trail_step        = 350.0;
+   g_strats[6].trail_cap         = 2000.0;
+
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   g_current_day = dt.day_of_year;
+   g_start_day_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   Print("Zerith Gold Trade Pro EA MT5 v1.34 initialized with exact MQ4 v1.31 parameters.");
+   return(INIT_SUCCEEDED);
   }
 
 //+------------------------------------------------------------------+
-//| Calculate Lot Size Based on Selected Mode & Strategy SL          |
+//| Deinitialization                                                 |
 //+------------------------------------------------------------------+
-double CalculateOrderLot(double sl_points)
+void OnDeinit(const int reason)
   {
-   double balance = g_acc.Balance();
-   double calculated_lot = InpStartLots;
-
-   switch(InpLotMode)
-     {
-      case LOT_MODE_FIXED:
-         calculated_lot = InpStartLots;
-         break;
-
-      case LOT_MODE_PER_BALANCE:
-         if(InpLotPerBalanceStep > 0.0)
-            calculated_lot = (balance / InpLotPerBalanceStep) * 0.01;
-         break;
-
-      case LOT_MODE_RISK_PERCENT:
-         if(sl_points > 0.0)
-           {
-            double risk_money = balance * (InpRiskPercent / 100.0);
-            double tick_value = g_sym.TickValue();
-            double tick_size  = g_sym.TickSize();
-            double point      = g_sym.Point();
-
-            if(tick_size > 0.0 && tick_value > 0.0)
-              {
-               double loss_per_lot = (sl_points * point / tick_size) * tick_value;
-               if(loss_per_lot > 0.0)
-                  calculated_lot = risk_money / loss_per_lot;
-              }
-           }
-         break;
-     }
-
-   double min_lot = g_sym.LotsMin();
-   double max_lot = g_sym.LotsMax();
-   double step    = g_sym.LotsStep();
-   if(step <= 0.0) step = 0.01;
-
-   calculated_lot = MathMax(min_lot, MathMin(max_lot, calculated_lot));
-   return MathFloor(calculated_lot / step) * step;
+   Comment("");
   }
 
 //+------------------------------------------------------------------+
-//| Close All Positions and Delete Pending Orders for Zerith GoldPro |
+//| Daily Swing High Detection (ccbsw_10)                            |
 //+------------------------------------------------------------------+
-void CloseAllPositionsAndOrders(string reason)
+double FindDailySwingHigh(int left_bars, int right_bars, int max_lookback, double detect_offset)
   {
-   PrintFormat("🚨 [Capital Protection] Executing Emergency Close! Reason: %s", reason);
-
-   // 1. Close Open Positions for all sub-strategies
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   double point = g_sym.Point();
+   for(int bar = right_bars + 1; bar <= max_lookback; bar++)
      {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol() == _Symbol && g_pos.Magic() >= InpBaseMagicNumber && g_pos.Magic() <= InpBaseMagicNumber + 7)
+      double candidate = iHigh(_Symbol, PERIOD_D1, bar);
+      if(candidate <= 0.0) continue;
+
+      bool fail = false;
+      
+      // Right bars check
+      for(int j = bar - 1; j >= bar - right_bars; j--)
         {
-         ulong ticket = g_pos.Ticket();
-         g_trade.SetExpertMagicNumber(g_pos.Magic());
-         g_trade.PositionClose(ticket);
+         if(iHigh(_Symbol, PERIOD_D1, j) > candidate) { fail = true; break; }
         }
-     }
-
-   // 2. Delete Pending Orders for all sub-strategies
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-     {
-      if(!g_ord.SelectByIndex(i)) continue;
-      if(g_ord.Symbol() == _Symbol && g_ord.Magic() >= InpBaseMagicNumber && g_ord.Magic() <= InpBaseMagicNumber + 7)
+      if(fail) continue;
+      
+      // Left bars check
+      for(int j = bar + 1; j <= bar + left_bars; j++)
         {
-         ulong ticket = g_ord.Ticket();
-         g_trade.SetExpertMagicNumber(g_ord.Magic());
-         g_trade.OrderDelete(ticket);
+         if(iHigh(_Symbol, PERIOD_D1, j) > candidate) { fail = true; break; }
         }
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Check and Enforce Drawdown & Daily Capital Protection            |
-//+------------------------------------------------------------------+
-void CheckAndEnforceDrawdownProtection()
-  {
-   datetime now = TimeCurrent();
-   string today_str = TimeToString(now, TIME_DATE);
-   datetime today_midnight = StringToTime(today_str + " 00:00");
-
-   // Daily Reset at midnight 00:00
-   if(g_last_daily_reset_date != today_midnight)
-     {
-      g_last_daily_reset_date = today_midnight;
-      g_dd_protection_tripped = false;
-     }
-
-   double balance = g_acc.Balance();
-   if(balance <= 0.0) return;
-
-   // 1. Calculate Current Floating P/L across all 7 strategies
-   double floating_pl = 0.0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol() == _Symbol && g_pos.Magic() >= InpBaseMagicNumber && g_pos.Magic() <= InpBaseMagicNumber + 7)
-        {
-         floating_pl += g_pos.Profit() + g_pos.Swap();
-        }
-     }
-
-   g_current_floating_loss   = (floating_pl < 0.0) ? MathAbs(floating_pl) : 0.0;
-   g_current_floating_dd_pct = (g_current_floating_loss / balance) * 100.0;
-
-   // 2. Calculate Realized P/L for Today (from 00:00 to now)
-   double today_realized_pl = 0.0;
-   if(HistorySelect(today_midnight, now))
-     {
-      int deals = HistoryDealsTotal();
-      for(int i = 0; i < deals; i++)
-        {
-         ulong deal_ticket = HistoryDealGetTicket(i);
-         if(deal_ticket == 0) continue;
-         ulong deal_magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
-         if(deal_magic < InpBaseMagicNumber || deal_magic > InpBaseMagicNumber + 7) continue;
-         if(HistoryDealGetString(deal_ticket, DEAL_SYMBOL) != _Symbol) continue;
-         if(HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
-
-         today_realized_pl += HistoryDealGetDouble(deal_ticket, DEAL_PROFIT) + HistoryDealGetDouble(deal_ticket, DEAL_SWAP);
-        }
-     }
-
-   g_today_realized_loss = (today_realized_pl < 0.0) ? MathAbs(today_realized_pl) : 0.0;
-   double total_today_loss = g_today_realized_loss + g_current_floating_loss;
-   g_today_total_loss_pct = (total_today_loss / balance) * 100.0;
-
-   if(!InpEnableDDProtection)
-      return;
-
-   // 3. Evaluate Breach Conditions
-   bool breach_total_dd = (InpMaxTotalDDPercent > 0.0 && g_current_floating_dd_pct >= InpMaxTotalDDPercent);
-   bool breach_money_dd = (InpMaxDDMoney > 0.0 && g_current_floating_loss >= InpMaxDDMoney);
-   bool breach_daily_dd = (InpMaxDailyLossPercent > 0.0 && g_today_total_loss_pct >= InpMaxDailyLossPercent);
-
-   if(breach_total_dd || breach_money_dd || breach_daily_dd)
-     {
-      if(!g_dd_protection_tripped)
-        {
-         string reason = "";
-         if(breach_total_dd)
-            reason = StringFormat("Total Floating DD reached %.2f%% (Limit: %.2f%%)", g_current_floating_dd_pct, InpMaxTotalDDPercent);
-         else if(breach_money_dd)
-            reason = StringFormat("Floating Loss reached $%.2f (Limit: $%.2f)", g_current_floating_loss, InpMaxDDMoney);
-         else if(breach_daily_dd)
-            reason = StringFormat("Daily Total Loss reached %.2f%% (Limit: %.2f%%)", g_today_total_loss_pct, InpMaxDailyLossPercent);
-
-         g_dd_protection_tripped = true;
-
-         if(InpCloseAllOnDDBreach)
-            CloseAllPositionsAndOrders(reason);
-        }
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Find Daily Swing High Resistance Level for a Sub-Strategy        |
-//+------------------------------------------------------------------+
-double FindDailySwingHigh(int left_bars, int right_bars, int max_lookback)
-  {
-   int start_bar = right_bars + 1;
-   for(int bar = start_bar; bar <= max_lookback; bar++)
-     {
-      double candidate_high = iHigh(_Symbol, PERIOD_D1, bar);
-      if(candidate_high <= 0.0) continue;
-
-      bool is_swing_high = true;
-
-      // Check left bars
-      for(int l = 1; l <= left_bars; l++)
-        {
-         if(iHigh(_Symbol, PERIOD_D1, bar + l) >= candidate_high)
-           {
-            is_swing_high = false;
-            break;
-           }
-        }
-      if(!is_swing_high) continue;
-
-      // Check right bars
-      for(int r = 1; r <= right_bars; r++)
-        {
-         if(iHigh(_Symbol, PERIOD_D1, bar - r) >= candidate_high)
-           {
-            is_swing_high = false;
-            break;
-           }
-        }
-      if(!is_swing_high) continue;
-
-      // Ensure this swing high is above all intermediate bars up to bar 1
+      if(fail) continue;
+      
+      // Distance check from current Ask
+      if(candidate <= g_sym.Ask() + detect_offset * point) continue;
+      
+      // Intermediate check: ensure candidate is highest up to today
       double highest_intermediate = 0.0;
       for(int k = 1; k < bar; k++)
         {
          double h = iHigh(_Symbol, PERIOD_D1, k);
-         if(h > highest_intermediate)
-            highest_intermediate = h;
+         if(h > highest_intermediate) highest_intermediate = h;
         }
-
-      if(candidate_high >= highest_intermediate && candidate_high > g_sym.Ask())
-        {
-         return candidate_high;
-        }
+      if(candidate < highest_intermediate) continue;
+      
+      return candidate;
      }
    return 0.0;
   }
 
 //+------------------------------------------------------------------+
-//| Find Daily Swing Low Support Level for a Sub-Strategy            |
+//| Daily Swing Low Detection (ccbsw_11)                             |
 //+------------------------------------------------------------------+
-double FindDailySwingLow(int left_bars, int right_bars, int max_lookback)
+double FindDailySwingLow(int left_bars, int right_bars, int max_lookback, double detect_offset)
   {
-   int start_bar = right_bars + 1;
-   for(int bar = start_bar; bar <= max_lookback; bar++)
+   double point = g_sym.Point();
+   for(int bar = right_bars + 1; bar <= max_lookback; bar++)
      {
-      double candidate_low = iLow(_Symbol, PERIOD_D1, bar);
-      if(candidate_low <= 0.0) continue;
+      double candidate = iLow(_Symbol, PERIOD_D1, bar);
+      if(candidate <= 0.0) continue;
 
-      bool is_swing_low = true;
-
-      // Check left bars
-      for(int l = 1; l <= left_bars; l++)
+      bool fail = false;
+      
+      // Right bars check
+      for(int j = bar - 1; j >= bar - right_bars; j--)
         {
-         if(iLow(_Symbol, PERIOD_D1, bar + l) <= candidate_low)
-           {
-            is_swing_low = false;
-            break;
-           }
+         if(iLow(_Symbol, PERIOD_D1, j) < candidate) { fail = true; break; }
         }
-      if(!is_swing_low) continue;
-
-      // Check right bars
-      for(int r = 1; r <= right_bars; r++)
+      if(fail) continue;
+      
+      // Left bars check
+      for(int j = bar + 1; j <= bar + left_bars; j++)
         {
-         if(iLow(_Symbol, PERIOD_D1, bar - r) <= candidate_low)
-           {
-            is_swing_low = false;
-            break;
-           }
+         if(iLow(_Symbol, PERIOD_D1, j) < candidate) { fail = true; break; }
         }
-      if(!is_swing_low) continue;
-
-      // Ensure this swing low is below all intermediate bars up to bar 1
+      if(fail) continue;
+      
+      // Distance check from current Bid
+      if(candidate >= g_sym.Bid() - detect_offset * point) continue;
+      
+      // Intermediate check: ensure candidate is lowest up to today
       double lowest_intermediate = DBL_MAX;
       for(int k = 1; k < bar; k++)
         {
          double l = iLow(_Symbol, PERIOD_D1, k);
-         if(l < lowest_intermediate)
-            lowest_intermediate = l;
+         if(l < lowest_intermediate) lowest_intermediate = l;
         }
-
-      if(candidate_low <= lowest_intermediate && candidate_low < g_sym.Bid())
-        {
-         return candidate_low;
-        }
+      if(candidate > lowest_intermediate) continue;
+      
+      return candidate;
      }
    return 0.0;
   }
 
 //+------------------------------------------------------------------+
-//| Helper Checkers for Positions and Specific Order Types by Magic  |
+//| Lot Sizing Calculation                                           |
 //+------------------------------------------------------------------+
-bool HasOpenPosition(ulong magic)
+double CalculateLots(double sl_points)
+  {
+   double lot = InpStartLots;
+   double min_lot = g_sym.LotsMin();
+   double max_lot = g_sym.LotsMax();
+   double step = g_sym.LotsStep();
+   if(step <= 0.0) step = 0.01;
+   
+   if(InpLotMode == LOT_MODE_FIXED)
+     {
+      lot = InpStartLots;
+     }
+   else if(InpLotMode == LOT_MODE_PER_BALANCE)
+     {
+      double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+      if(InpLotPerBalanceStep > 0.0)
+        {
+         lot = (bal / InpLotPerBalanceStep) * InpStartLots;
+        }
+     }
+   else if(InpLotMode == LOT_MODE_RISK_PERCENT)
+     {
+      double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+      double risk_money = bal * (InpRiskPercent / 100.0);
+      double tick_value = g_sym.TickValue();
+      double tick_size = g_sym.TickSize();
+      if(sl_points > 0.0 && tick_value > 0.0 && tick_size > 0.0)
+        {
+         double point_value = tick_value / (tick_size / g_sym.Point());
+         if(point_value > 0.0)
+            lot = risk_money / (sl_points * point_value);
+        }
+     }
+   
+   lot = MathMax(min_lot, MathMin(max_lot, lot));
+   return MathFloor(lot / step) * step;
+  }
+
+//+------------------------------------------------------------------+
+//| Emergency Close All on DD Breach                                 |
+//+------------------------------------------------------------------+
+void CloseAll()
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol() == _Symbol && g_pos.Magic() == magic)
-         return true;
-     }
-   return false;
-  }
-
-bool HasBuyStopOrder(ulong magic, ulong &ticket, double &price)
-  {
-   ticket = 0;
-   price  = 0.0;
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-     {
-      if(!g_ord.SelectByIndex(i)) continue;
-      if(g_ord.Symbol() == _Symbol && g_ord.Magic() == magic && g_ord.OrderType() == ORDER_TYPE_BUY_STOP)
+      if(g_pos.SelectByIndex(i))
         {
-         ticket = g_ord.Ticket();
-         price  = g_ord.PriceOpen();
-         return true;
-        }
-     }
-   return false;
-  }
-
-bool HasSellStopOrder(ulong magic, ulong &ticket, double &price)
-  {
-   ticket = 0;
-   price  = 0.0;
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-     {
-      if(!g_ord.SelectByIndex(i)) continue;
-      if(g_ord.Symbol() == _Symbol && g_ord.Magic() == magic && g_ord.OrderType() == ORDER_TYPE_SELL_STOP)
-        {
-         ticket = g_ord.Ticket();
-         price  = g_ord.PriceOpen();
-         return true;
-        }
-     }
-   return false;
-  }
-
-//+------------------------------------------------------------------+
-//| Cancel Pending Orders for Strategy if Position is already Active |
-//+------------------------------------------------------------------+
-void HandleOCOAndCleanup(ulong magic)
-  {
-   if(HasOpenPosition(magic))
-     {
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-        {
-         if(!g_ord.SelectByIndex(i)) continue;
-         if(g_ord.Symbol() == _Symbol && g_ord.Magic() == magic)
+         if(g_pos.Symbol() == _Symbol && g_pos.Magic() >= InpBaseMagicNumber && g_pos.Magic() <= InpBaseMagicNumber + 10)
            {
-            ulong t = g_ord.Ticket();
-            g_trade.SetExpertMagicNumber(magic);
-            g_trade.OrderDelete(t);
+            g_trade.SetExpertMagicNumber(g_pos.Magic());
+            g_trade.PositionClose(g_pos.Ticket());
+           }
+        }
+     }
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(g_order.SelectByIndex(i))
+        {
+         if(g_order.Symbol() == _Symbol && g_order.Magic() >= InpBaseMagicNumber && g_order.Magic() <= InpBaseMagicNumber + 10)
+           {
+            g_trade.SetExpertMagicNumber(g_order.Magic());
+            g_trade.OrderDelete(g_order.Ticket());
            }
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Manage Break-Even and Dynamic Trailing Stop for Open Positions   |
+//| Drawdown & Daily Capital Protection Engine                       |
+//+------------------------------------------------------------------+
+bool CheckDrawdown()
+  {
+   if(!InpEnableDDProtection) return false;
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   if(dt.day_of_year != g_current_day)
+     {
+      g_current_day = dt.day_of_year;
+      g_start_day_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_trading_paused = false;
+     }
+   
+   if(g_trading_paused) return true;
+   
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(bal <= 0.0) return false;
+   
+   double total_dd_perc = ((bal - eq) / bal) * 100.0;
+   double daily_loss_perc = (g_start_day_balance > 0.0) ? (((g_start_day_balance - eq) / g_start_day_balance) * 100.0) : 0.0;
+   double total_dd_money = bal - eq;
+   
+   bool breached = false;
+   if(InpMaxTotalDDPercent > 0.0 && total_dd_perc >= InpMaxTotalDDPercent) breached = true;
+   if(InpMaxDailyLossPercent > 0.0 && daily_loss_perc >= InpMaxDailyLossPercent) breached = true;
+   if(InpMaxDDMoney > 0.0 && total_dd_money >= InpMaxDDMoney) breached = true;
+   
+   if(breached)
+     {
+      if(InpCloseAllOnDDBreach) CloseAll();
+      if(InpPauseTradingAfterDDBreach) g_trading_paused = true;
+      return true;
+     }
+   
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Manage Virtual Expiration (Original Virtual_expiration logic)    |
+//+------------------------------------------------------------------+
+void ManageVirtualExpiration()
+  {
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(g_order.SelectByIndex(i))
+        {
+         if(g_order.Symbol() == _Symbol)
+           {
+            ulong magic = g_order.Magic();
+            for(int s = 0; s < 7; s++)
+              {
+               if(g_strats[s].enabled && magic == g_strats[s].magic)
+                 {
+                  datetime open_time = g_order.TimeSetup();
+                  if(TimeCurrent() > open_time + g_strats[s].expiry_hours * 3600)
+                    {
+                     g_trade.SetExpertMagicNumber(magic);
+                     g_trade.OrderDelete(g_order.Ticket());
+                    }
+                  break;
+                 }
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Manage Trailing Stops (Original ccbsw_16 Architecture)           |
 //+------------------------------------------------------------------+
 void ManageTrailingStops()
   {
-   if(!InpEnableTrailing && !InpEnableBreakEven)
-      return;
-
-   double point  = g_sym.Point();
-   int    digits = g_sym.Digits();
-
-   for(int s = 0; s < 7; s++)
+   if(!InpEnableTrailing) return;
+   
+   double point = g_sym.Point();
+   int digits   = g_sym.Digits();
+   long freeze  = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(!g_strategies[s].enabled) continue;
-
-      ulong magic       = g_strategies[s].magic;
-      double trail_start = g_strategies[s].trail_start_points * point;
-      double trail_dist  = g_strategies[s].trail_dist_points * point;
-      double trail_step  = g_strategies[s].trail_step_points * point;
-
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Symbol() != _Symbol) continue;
+      
+      ulong magic = g_pos.Magic();
+      for(int s = 0; s < 7; s++)
         {
-         if(!g_pos.SelectByIndex(i)) continue;
-         if(g_pos.Symbol() != _Symbol || g_pos.Magic() != magic) continue;
-
-         ulong ticket       = g_pos.Ticket();
-         double open_price  = g_pos.PriceOpen();
-         double current_sl  = g_pos.StopLoss();
-         double current_tp  = g_pos.TakeProfit();
-         ENUM_POSITION_TYPE type = g_pos.PositionType();
-
+         if(!g_strats[s].enabled || magic != g_strats[s].magic) continue;
+         
+         double sl          = g_pos.StopLoss();
+         double tp          = g_pos.TakeProfit();
+         double op          = g_pos.PriceOpen();
+         double trail_start = g_strats[s].trail_start;
+         double trail_step  = g_strats[s].trail_step;
+         double trail_cap   = g_strats[s].trail_cap;
+         
          g_trade.SetExpertMagicNumber(magic);
-
-         if(type == POSITION_TYPE_BUY)
+         
+         if(g_pos.PositionType() == POSITION_TYPE_BUY && trail_start > 0.0)
            {
-            double current_profit_pts = (g_sym.Bid() - open_price);
-
-            // 1. Break-Even
-            if(InpEnableBreakEven && current_profit_pts >= trail_start && (current_sl < open_price || current_sl == 0.0))
+            double bid = g_sym.Bid();
+            if(bid > sl + (trail_start + 0.1) * point &&
+               bid > op + trail_step * point &&
+               (tp == 0.0 || bid < tp - freeze * point) &&
+               (sl < op + trail_cap * point))
               {
-               double new_sl = NormalizeDouble(open_price + 10.0 * point, digits);
-               g_trade.PositionModify(ticket, new_sl, current_tp);
-               PrintFormat("🔒 [%s] BUY #%I64u Moved to Break-Even at %.2f", g_strategies[s].name, ticket, new_sl);
-              }
-
-            // 2. Trailing Stop
-            if(InpEnableTrailing && current_profit_pts >= trail_start)
-              {
-               double proposed_sl = NormalizeDouble(g_sym.Bid() - trail_dist, digits);
-               if(proposed_sl > current_sl + trail_step && proposed_sl > open_price)
+               double new_sl = NormalizeDouble(bid - trail_start * point, digits);
+               if(new_sl > sl + point)
                  {
-                  g_trade.PositionModify(ticket, proposed_sl, current_tp);
-                  PrintFormat("📈 [%s] BUY #%I64u Trailing Stop adjusted to %.2f", g_strategies[s].name, ticket, proposed_sl);
+                  g_trade.PositionModify(g_pos.Ticket(), new_sl, tp);
                  }
               }
            }
-         else if(type == POSITION_TYPE_SELL)
+         else if(g_pos.PositionType() == POSITION_TYPE_SELL && trail_start > 0.0)
            {
-            double current_profit_pts = (open_price - g_sym.Ask());
-
-            // 1. Break-Even
-            if(InpEnableBreakEven && current_profit_pts >= trail_start && (current_sl > open_price || current_sl == 0.0))
+            double ask = g_sym.Ask();
+            if((sl == 0.0 || ask < sl - (trail_start + 0.1) * point) &&
+               ask < op - trail_step * point &&
+               (tp == 0.0 || ask > tp + freeze * point) &&
+               (sl == 0.0 || sl > op - trail_cap * point))
               {
-               double new_sl = NormalizeDouble(open_price - 10.0 * point, digits);
-               g_trade.PositionModify(ticket, new_sl, current_tp);
-               PrintFormat("🔒 [%s] SELL #%I64u Moved to Break-Even at %.2f", g_strategies[s].name, ticket, new_sl);
-              }
-
-            // 2. Trailing Stop
-            if(InpEnableTrailing && current_profit_pts >= trail_start)
-              {
-               double proposed_sl = NormalizeDouble(g_sym.Ask() + trail_dist, digits);
-               if((current_sl == 0.0 || proposed_sl < current_sl - trail_step) && proposed_sl < open_price)
+               double new_sl = NormalizeDouble(ask + trail_start * point, digits);
+               if(sl == 0.0 || new_sl < sl - point)
                  {
-                  g_trade.PositionModify(ticket, proposed_sl, current_tp);
-                  PrintFormat("📈 [%s] SELL #%I64u Trailing Stop adjusted to %.2f", g_strategies[s].name, ticket, proposed_sl);
+                  g_trade.PositionModify(g_pos.Ticket(), new_sl, tp);
                  }
               }
            }
+         break;
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Execute Daily Breakout Signal Logic for All 7 Sub-Strategies     |
+//| Execute Daily Breakout Strategies (A to H)                       |
 //+------------------------------------------------------------------+
-void ExecuteDailyBreakoutStrategies()
+void ExecuteStrategies()
   {
-   if(g_dd_protection_tripped && InpPauseTradingAfterDDBreach)
-      return;
-
-   // Account pending order limit safety guard
-   long max_orders_allowed = AccountInfoInteger(ACCOUNT_LIMIT_ORDERS);
-   if(max_orders_allowed > 0 && (OrdersTotal() + PositionsTotal()) >= (max_orders_allowed - 4))
-     {
-      PrintFormat("⚠️ [Order Guard] Account Orders Limit approached (%d / %I64d). Skipping new pending orders.",
-                  OrdersTotal() + PositionsTotal(), max_orders_allowed);
-      return;
-     }
-
-   double point  = g_sym.Point();
-   int    digits = g_sym.Digits();
-
-   // Spread Check
-   double spread = (g_sym.Ask() - g_sym.Bid()) / point;
-   if(spread > InpMaxSpreadPoints)
-      return;
-
+   if(g_trading_paused) return;
+   if(g_sym.Spread() > InpMaxSpreadPoints) return;
+   
+   long limit = AccountInfoInteger(ACCOUNT_LIMIT_ORDERS);
+   double point = g_sym.Point();
+   int digits = g_sym.Digits();
+   
    for(int s = 0; s < 7; s++)
      {
-      if(!g_strategies[s].enabled) continue;
-
-      ulong magic = g_strategies[s].magic;
-      g_trade.SetExpertMagicNumber(magic);
-
-      // If this strategy already has an active open position, perform OCO cleanup and skip
-      if(HasOpenPosition(magic))
+      if(!g_strats[s].enabled) continue;
+      
+      bool has_buy_pos = false, has_sell_pos = false;
+      bool has_buy_stop = false, has_sell_stop = false;
+      double existing_buy_price = 0.0, existing_sell_price = 0.0;
+      ulong b_ticket = 0, s_ticket = 0;
+      
+      for(int i = 0; i < PositionsTotal(); i++)
         {
-         HandleOCOAndCleanup(magic);
-         continue;
-        }
-
-      double volume = CalculateOrderLot(g_strategies[s].sl_points);
-      if(volume <= 0.0) continue;
-
-      datetime expiry_time = TimeCurrent() + g_strategies[s].expiry_hours * 3600;
-
-      // 1. Process Buy Stop
-      ulong  existing_buy_ticket = 0;
-      double existing_buy_price  = 0.0;
-      bool   has_buy_stop = HasBuyStopOrder(magic, existing_buy_ticket, existing_buy_price);
-
-      double swing_high = FindDailySwingHigh(g_strategies[s].left_bars, g_strategies[s].right_bars, g_strategies[s].max_lookback);
-      if(swing_high > 0.0)
-        {
-         double buy_stop_price = NormalizeDouble(swing_high + g_strategies[s].offset_points * point, digits);
-         if(buy_stop_price > g_sym.Ask())
+         if(g_pos.SelectByIndex(i) && g_pos.Symbol() == _Symbol && g_pos.Magic() == g_strats[s].magic)
            {
-            // If existing order price changed significantly or no order exists, update it
-            if(!has_buy_stop)
+            if(g_pos.PositionType() == POSITION_TYPE_BUY) has_buy_pos = true;
+            if(g_pos.PositionType() == POSITION_TYPE_SELL) has_sell_pos = true;
+           }
+        }
+      for(int i = 0; i < OrdersTotal(); i++)
+        {
+         if(g_order.SelectByIndex(i) && g_order.Symbol() == _Symbol && g_order.Magic() == g_strats[s].magic)
+           {
+            if(g_order.OrderType() == ORDER_TYPE_BUY_STOP)
               {
-               double buy_tp = (g_strategies[s].tp_points > 0.0) ? NormalizeDouble(buy_stop_price + g_strategies[s].tp_points * point, digits) : 0.0;
-               double buy_sl = (g_strategies[s].sl_points > 0.0) ? NormalizeDouble(buy_stop_price - g_strategies[s].sl_points * point, digits) : 0.0;
-               string comment = StringFormat("%s_%s [BS]", InpTradeCommentPrefix, g_strategies[s].name);
-
-               if(g_trade.BuyStop(volume, buy_stop_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_SPECIFIED, expiry_time, comment))
-                 {
-                  PrintFormat("👑 [Zerith GoldPro] Placed BUY STOP (%s) at %.2f (Daily High: %.2f) Lot: %.2f TP: %.2f SL: %.2f",
-                              g_strategies[s].name, buy_stop_price, swing_high, volume, buy_tp, buy_sl);
-                 }
+               has_buy_stop = true;
+               existing_buy_price = g_order.PriceOpen();
+               b_ticket = g_order.Ticket();
               }
-            else if(MathAbs(existing_buy_price - buy_stop_price) > 50.0 * point)
+            if(g_order.OrderType() == ORDER_TYPE_SELL_STOP)
               {
-               // Level moved -> replace order
-               g_trade.OrderDelete(existing_buy_ticket);
+               has_sell_stop = true;
+               existing_sell_price = g_order.PriceOpen();
+               s_ticket = g_order.Ticket();
               }
            }
         }
-      else if(has_buy_stop)
+      
+      g_trade.SetExpertMagicNumber(g_strats[s].magic);
+      double lot = CalculateLots(g_strats[s].sl_points);
+      if(lot <= 0.0) continue;
+      
+      string comment = StringFormat("%s_%s", InpTradeCommentPrefix, g_strats[s].name);
+      
+      // 1. Buy Entry
+      if(!has_buy_pos)
         {
-         // Swing High invalid -> clean stale order
-         g_trade.OrderDelete(existing_buy_ticket);
-        }
-
-      // 2. Process Sell Stop
-      ulong  existing_sell_ticket = 0;
-      double existing_sell_price  = 0.0;
-      bool   has_sell_stop = HasSellStopOrder(magic, existing_sell_ticket, existing_sell_price);
-
-      double swing_low = FindDailySwingLow(g_strategies[s].left_bars, g_strategies[s].right_bars, g_strategies[s].max_lookback);
-      if(swing_low > 0.0)
-        {
-         double sell_stop_price = NormalizeDouble(swing_low - g_strategies[s].offset_points * point, digits);
-         if(sell_stop_price < g_sym.Bid())
+         double swing_high = FindDailySwingHigh(g_strats[s].left_bars, g_strats[s].right_bars, g_strats[s].max_lookback, g_strats[s].detect_offset);
+         if(swing_high > 0.0)
            {
-            if(!has_sell_stop)
+            double entry = NormalizeDouble(swing_high + g_strats[s].buy_entry_offset * point, digits);
+            bool skip = false;
+            if(has_buy_stop)
               {
-               double sell_tp = (g_strategies[s].tp_points > 0.0) ? NormalizeDouble(sell_stop_price - g_strategies[s].tp_points * point, digits) : 0.0;
-               double sell_sl = (g_strategies[s].sl_points > 0.0) ? NormalizeDouble(sell_stop_price + g_strategies[s].sl_points * point, digits) : 0.0;
-               string comment = StringFormat("%s_%s [SS]", InpTradeCommentPrefix, g_strategies[s].name);
-
-               if(g_trade.SellStop(volume, sell_stop_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_SPECIFIED, expiry_time, comment))
-                 {
-                  PrintFormat("👑 [Zerith GoldPro] Placed SELL STOP (%s) at %.2f (Daily Low: %.2f) Lot: %.2f TP: %.2f SL: %.2f",
-                              g_strategies[s].name, sell_stop_price, swing_low, volume, sell_tp, sell_sl);
-                 }
+               if(MathAbs(existing_buy_price - entry) < g_strats[s].dup_tolerance * point) skip = true;
+               else if(entry > existing_buy_price) skip = true; // keep lower/better entry
               }
-            else if(MathAbs(existing_sell_price - sell_stop_price) > 50.0 * point)
+            if(!skip && (limit == 0 || (OrdersTotal() + PositionsTotal()) < limit) && entry > g_sym.Ask())
               {
-               // Level moved -> replace order
-               g_trade.OrderDelete(existing_sell_ticket);
+               double sl = (g_strats[s].sl_points > 0.0) ? NormalizeDouble(entry - g_strats[s].sl_points * point, digits) : 0.0;
+               double tp = (g_strats[s].tp_points > 0.0) ? NormalizeDouble(entry + g_strats[s].tp_points * point, digits) : 0.0;
+               
+               if(has_buy_stop) g_trade.OrderDelete(b_ticket);
+               g_trade.BuyStop(lot, entry, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
               }
            }
         }
-      else if(has_sell_stop)
+      
+      // 2. Sell Entry
+      if(!has_sell_pos)
         {
-         // Swing Low invalid -> clean stale order
-         g_trade.OrderDelete(existing_sell_ticket);
+         double swing_low = FindDailySwingLow(g_strats[s].left_bars, g_strats[s].right_bars, g_strats[s].max_lookback, g_strats[s].detect_offset);
+         if(swing_low > 0.0)
+           {
+            double entry = NormalizeDouble(swing_low - g_strats[s].sell_entry_offset * point, digits);
+            bool skip = false;
+            if(has_sell_stop)
+              {
+               if(MathAbs(existing_sell_price - entry) < g_strats[s].dup_tolerance * point) skip = true;
+               else if(entry < existing_sell_price) skip = true; // keep higher/better entry
+              }
+            if(!skip && (limit == 0 || (OrdersTotal() + PositionsTotal()) < limit) && entry < g_sym.Bid())
+              {
+               double sl = (g_strats[s].sl_points > 0.0) ? NormalizeDouble(entry + g_strats[s].sl_points * point, digits) : 0.0;
+               double tp = (g_strats[s].tp_points > 0.0) ? NormalizeDouble(entry - g_strats[s].tp_points * point, digits) : 0.0;
+               
+               if(has_sell_stop) g_trade.OrderDelete(s_ticket);
+               g_trade.SellStop(lot, entry, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+              }
+           }
         }
      }
   }
@@ -744,88 +642,19 @@ void ExecuteDailyBreakoutStrategies()
 //+------------------------------------------------------------------+
 void DrawDashboard()
   {
-   int open_positions = 0;
-   int pending_orders = 0;
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol() == _Symbol && g_pos.Magic() >= InpBaseMagicNumber && g_pos.Magic() <= InpBaseMagicNumber + 7)
-         open_positions++;
-     }
-
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-     {
-      if(!g_ord.SelectByIndex(i)) continue;
-      if(g_ord.Symbol() == _Symbol && g_ord.Magic() >= InpBaseMagicNumber && g_ord.Magic() <= InpBaseMagicNumber + 7)
-         pending_orders++;
-     }
-
    int active_modules = 0;
-   for(int s = 0; s < 7; s++)
-     {
-      if(g_strategies[s].enabled) active_modules++;
-     }
-
-   string dd_status = "OFF";
-   if(InpEnableDDProtection)
-     {
-      dd_status = g_dd_protection_tripped ? "TRIPPED (TRADING PAUSED)" : "ACTIVE (NORMAL)";
-     }
-
-   string text = StringFormat("--- ZERITH GOLD TRADE PRO EA (MT5) ---\n"
-                              "Trading Status: %s\n"
-                              "Active Modules: %d / 7 Daily Breakout Modules\n"
-                              "Lot Sizing Mode: %s (Base Lot: %.2f)\n"
-                              "Active Positions: %d | Pending Orders: %d\n"
-                              "Trailing Stop: %s | Break-Even: %s\n"
-                              "------------------------------------------\n"
-                              "DD Protection: %s\n"
-                              "Current Floating DD: $%.2f (%.2f%% / Max %.1f%%)\n"
-                              "Today Total Loss: %.2f%% (Max Daily %.1f%%)\n"
-                              "Account Equity: $%.2f | Balance: $%.2f",
-                              (g_dd_protection_tripped ? "PAUSED (DD LIMIT BREACH)" : "ACTIVE & SCANNING"),
-                              active_modules,
-                              EnumToString(InpLotMode), CalculateOrderLot(1500.0),
-                              open_positions, pending_orders,
-                              (InpEnableTrailing ? "ENABLED" : "OFF"), (InpEnableBreakEven ? "ENABLED" : "OFF"),
-                              dd_status,
-                              g_current_floating_loss, g_current_floating_dd_pct, InpMaxTotalDDPercent,
-                              g_today_total_loss_pct, InpMaxDailyLossPercent,
-                              g_acc.Equity(), g_acc.Balance());
+   for(int i = 0; i < 7; i++) if(g_strats[i].enabled) active_modules++;
+   
+   string text = "--- ZERITH GOLD TRADE PRO EA (MT5 v1.34) ---\n";
+   text += "Status: " + (g_trading_paused ? "PAUSED (DD Limit Breached)" : "RUNNING & SCANNING") + "\n";
+   text += "Active Modules: " + IntegerToString(active_modules) + " / 7 (A, C, D, E, F, G, H)\n";
+   text += "Open Positions: " + IntegerToString(PositionsTotal()) + " | Pending Orders: " + IntegerToString(OrdersTotal()) + "\n";
+   text += "Account Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + "\n";
+   text += "Account Equity: $" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + "\n";
+   text += "Trailing Engine: " + (InpEnableTrailing ? "ACTIVE (Real-time)" : "OFF") + "\n";
+   text += "Virtual Expiry: ACTIVE (D1/H1 Sweeps)\n";
+   
    Comment(text);
-  }
-
-//+------------------------------------------------------------------+
-//| Expert Initialization Function                                   |
-//+------------------------------------------------------------------+
-int OnInit()
-  {
-   if(!g_sym.Name(_Symbol))
-     {
-      Print("Symbol initialization failed!");
-      return INIT_FAILED;
-     }
-
-   g_trade.SetDeviationInPoints(InpSlippage);
-   g_trade.SetTypeFillingBySymbol(_Symbol);
-
-   InitStrategies();
-
-   g_last_daily_reset_date = 0;
-   g_last_scan_bar_time    = 0;
-   g_dd_protection_tripped = false;
-
-   Print("Zerith Gold Trade Pro EA MT5 v1.33 successfully initialized.");
-   return INIT_SUCCEEDED;
-  }
-
-//+------------------------------------------------------------------+
-//| Expert Deinitialization Function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-  {
-   Comment("");
   }
 
 //+------------------------------------------------------------------+
@@ -833,23 +662,29 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   g_sym.RefreshRates();
-
-   // 1. Enforce Drawdown & Capital Protection (Every tick)
-   CheckAndEnforceDrawdownProtection();
-
-   // 2. Manage Trailing Stop & Break-Even on Open Positions (Every tick)
-   ManageTrailingStops();
-
-   // 3. Scan & Place Daily Swing High/Low Breakout Orders (Evaluated on hourly bar open or initial load)
-   datetime current_bar_time = iTime(_Symbol, PERIOD_H1, 0);
-   if(g_last_scan_bar_time != current_bar_time)
+   if(!g_sym.RefreshRates()) return;
+   
+   // 1. Drawdown & Capital Protection (Every tick)
+   if(CheckDrawdown())
      {
-      g_last_scan_bar_time = current_bar_time;
-      ExecuteDailyBreakoutStrategies();
+      DrawDashboard();
+      return;
      }
-
-   // 4. Render Chart Dashboard
+   
+   // 2. Trailing Stop Management (Every tick)
+   ManageTrailingStops();
+   
+   // 3. Hourly Bar Open: Virtual Expiration Cleanup & Daily Breakout Scan
+   static datetime last_h1 = 0;
+   datetime curr_h1 = iTime(_Symbol, PERIOD_H1, 0);
+   if(curr_h1 != last_h1)
+     {
+      ManageVirtualExpiration();
+      ExecuteStrategies();
+      last_h1 = curr_h1;
+     }
+   
+   // 4. Update Dashboard
    DrawDashboard();
   }
 //+------------------------------------------------------------------+
