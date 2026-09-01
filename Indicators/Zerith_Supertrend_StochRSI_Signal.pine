@@ -136,8 +136,7 @@ emaSpread = close != 0 ? (math.abs(emaFast - emaSlow) / close) * 100 : 0.0
 passEMA   = not useEMASpread or (emaSpread >= minSpreadPct)
 
 // 5.7 MTF Supertrend
-f_htf_st() => ta.supertrend(htfAtrMult, htfAtrPeriod)
-[htfSTVal, htfSTDir] = useMTF_ST ? request.security(syminfo.tickerid, htfTimeframe, f_htf_st(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off) : [stValue, stDirection]
+[htfSTVal, htfSTDir] = request.security(syminfo.tickerid, htfTimeframe, ta.supertrend(htfAtrMult, htfAtrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 htfIsUp   = htfSTDir < 0
 htfIsDown = htfSTDir > 0
 passMTF_Buy  = not useMTF_ST or htfIsUp
