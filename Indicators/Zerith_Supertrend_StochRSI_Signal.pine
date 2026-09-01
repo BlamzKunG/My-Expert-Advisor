@@ -6,8 +6,7 @@ indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", over
 // =============================================================================
 grp_trend = "1. Master Trend Filter Settings"
 useTrendFilter      = input.bool(true, "Enable Master Trend Filter", group=grp_trend)
-trendMode           = input.string("Supertrend (Custom TF)", "Trend Filter Engine", 
-                      options=["Supertrend (Custom TF)", "Higher Timeframe (HTF) Supertrend", "EMA Baseline (e.g. EMA 200)", "Dual Supertrend (Chart + HTF)", "None (Raw Reversal Mode)"], group=grp_trend)
+trendMode           = input.string("Supertrend (Custom TF)", "Trend Filter Engine", options=["Supertrend (Custom TF)", "Higher Timeframe (HTF) Supertrend", "EMA Baseline (e.g. EMA 200)", "Dual Supertrend (Chart + HTF)", "None (Raw Reversal Mode)"], group=grp_trend)
 
 // 1.1 Base Supertrend
 stTimeframe         = input.timeframe("", "Supertrend Timeframe (Empty = Chart TF)", group=grp_trend)
@@ -28,8 +27,7 @@ emaLength           = input.int(200, "EMA Baseline Length", group=grp_trend)
 // 2. SIGNAL GENERATORS: DEMARKER & STOCHASTIC RSI
 // =============================================================================
 grp_signal = "2. Signal Engines (DeMarker & Stoch RSI)"
-signalMode          = input.string("Combined (DeMarker + Stoch RSI)", "Entry Signal Mode",
-                      options=["Combined (DeMarker + Stoch RSI)", "DeMarker Only", "Stoch RSI Only", "Momentum Continuation (Trend + Stoch Cross)"], group=grp_signal)
+signalMode          = input.string("Combined (DeMarker + Stoch RSI)", "Entry Signal Mode", options=["Combined (DeMarker + Stoch RSI)", "DeMarker Only", "Stoch RSI Only", "Momentum Continuation (Trend + Stoch Cross)"], group=grp_signal)
 
 // 2.1 DeMarker Settings
 useDeMarker         = input.bool(true, "Enable DeMarker Module", group=grp_signal)
@@ -212,31 +210,35 @@ allFilters_Buy  = passDonchian_Buy and passVolume and passER and passChop and pa
 allFilters_Sell = passDonchian_Sell and passVolume and passER and passChop and passBBW and passEMA
 
 // =============================================================================
-// 9. ENTRY SIGNAL EVALUATION
+// 9. ENTRY SIGNAL EVALUATION (GLOBAL STATE EVALUATIONS)
 // =============================================================================
-// Stoch RSI Triggers
-stochBuyCross   = ta.crossover(kVal, dVal) and (kVal <= stochOversold or kVal[1] <= stochOversold or kVal <= 30.0)
-stochSellCross  = ta.crossunder(kVal, dVal) and (kVal >= stochOverbought or kVal[1] >= stochOverbought or kVal >= 70.0)
+// Global Crossover / Crossunder calculations (to prevent CW10002 warning)
+stochBuyCross   = ta.crossover(kVal, dVal)
+stochSellCross  = ta.crossunder(kVal, dVal)
+demBuyCross     = ta.crossover(demValue, demOversold)
+demSellCross    = ta.crossunder(demValue, demOverbought)
 
-// DeMarker Triggers
-demBuyCond      = not useDeMarker or (demValue <= demOversold or demValue[1] <= demOversold or ta.crossover(demValue, demOversold))
-demSellCond     = not useDeMarker or (demValue >= demOverbought or demValue[1] >= demOverbought or ta.crossunder(demValue, demOverbought))
+stochBuyZone    = kVal <= stochOversold or kVal[1] <= stochOversold or kVal <= 30.0
+stochSellZone   = kVal >= stochOverbought or kVal[1] >= stochOverbought or kVal >= 70.0
+
+demBuyCond      = not useDeMarker or demValue <= demOversold or demValue[1] <= demOversold or demBuyCross
+demSellCond     = not useDeMarker or demValue >= demOverbought or demValue[1] >= demOverbought or demSellCross
 
 bool rawBuyTrigger  = false
 bool rawSellTrigger = false
 
 if signalMode == "Combined (DeMarker + Stoch RSI)"
-    rawBuyTrigger  := (not useStochRsi or stochBuyCross) and demBuyCond
-    rawSellTrigger := (not useStochRsi or stochSellCross) and demSellCond
+    rawBuyTrigger  := (not useStochRsi or (stochBuyCross and stochBuyZone)) and demBuyCond
+    rawSellTrigger := (not useStochRsi or (stochSellCross and stochSellZone)) and demSellCond
 else if signalMode == "DeMarker Only"
-    rawBuyTrigger  := ta.crossover(demValue, demOversold) or (demValue <= demOversold and demValue > demValue[1])
-    rawSellTrigger := ta.crossunder(demValue, demOverbought) or (demValue >= demOverbought and demValue < demValue[1])
+    rawBuyTrigger  := demBuyCross or (demValue <= demOversold and demValue > demValue[1])
+    rawSellTrigger := demSellCross or (demValue >= demOverbought and demValue < demValue[1])
 else if signalMode == "Stoch RSI Only"
-    rawBuyTrigger  := stochBuyCross
-    rawSellTrigger := stochSellCross
+    rawBuyTrigger  := stochBuyCross and stochBuyZone
+    rawSellTrigger := stochSellCross and stochSellZone
 else if signalMode == "Momentum Continuation (Trend + Stoch Cross)"
-    rawBuyTrigger  := ta.crossover(kVal, dVal) and kVal < 60.0 and demValue > 0.4
-    rawSellTrigger := ta.crossunder(kVal, dVal) and kVal > 40.0 and demValue < 0.6
+    rawBuyTrigger  := stochBuyCross and kVal < 60.0 and demValue > 0.4
+    rawSellTrigger := stochSellCross and kVal > 40.0 and demValue < 0.6
 
 // Cooldown Management
 var int lastSignalBar = -100
@@ -273,9 +275,11 @@ alertcondition(finalSell, title="Zerith Sell Signal", message="[ZERITH SELL] {{t
 // =============================================================================
 // 11. REAL-TIME FILTER DASHBOARD
 // =============================================================================
-table_pos = dashboardPosition == "Top Right" ? position.top_right :
-            dashboardPosition == "Bottom Right" ? position.bottom_right :
-            dashboardPosition == "Top Left" ? position.top_left : position.bottom_left
+table_pos = switch dashboardPosition
+    "Bottom Right" => position.bottom_right
+    "Top Left"     => position.top_left
+    "Bottom Left"  => position.bottom_left
+    => position.top_right
 
 var table infoTable = table.new(table_pos, 3, 10, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.rgb(70, 70, 70))
 
