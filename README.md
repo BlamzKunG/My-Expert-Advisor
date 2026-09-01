@@ -14,15 +14,15 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 .
 ├── Experts/                      # MQL5 Expert Advisor source files (.mq5)
 │   ├── HaruuSignalReceiver.mq5
-│   ├── MACD_Martingale_Grid.mq5
-│   ├── ORC_Crypto_Ichimoku_H4_EA.mq5
-│   ├── Quantum_Emperor_EA.mq5
-│   ├── Quantum_Queen_Supertrend_EA.mq5
-│   ├── XAUUSD_Adaptive_MeanReversion_EA.mq5
-│   └── XAUUSD_Advanced_Grid_EA.mq5
+│   ├── Zerith_Crypto_Ichimoku_H4_EA.mq5
+│   ├── Zerith_Gold_Adaptive_MeanReversion_EA.mq5
+│   ├── Zerith_Gold_Advanced_Grid_EA.mq5
+│   ├── Zerith_London_Breakout_Recovery_EA.mq5
+│   ├── Zerith_MACD_Martingale_Grid_EA.mq5
+│   └── Zerith_Supertrend_MultiStrategy_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
-│   ├── Quantum_Queen_Supertrend_Signal.pine
-│   └── Supertrend_DeMarker_StochRSI_Signal.pine
+│   ├── Zerith_Supertrend_DeMarker_Signal.pine
+│   └── Zerith_Supertrend_StochRSI_Signal.pine
 ├── Scripts/                      # MQL5 Script source files (.mq5)
 │   └── ExportMultiData_M5.mq5
 ├── presets/                      # Parameter preset files (.set)
@@ -42,22 +42,22 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 
 ## Available Files
 
-### Expert Advisors
-| File | Category / Target Asset | Preset Directory |
+### Expert Advisors (Zerith Series)
+| File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
-| [`Experts/Quantum_Emperor_EA.mq5`](Experts/Quantum_Emperor_EA.mq5) | Range Breakout (ORB) / XAUUSD & FX | - |
-| [`Experts/Quantum_Queen_Supertrend_EA.mq5`](Experts/Quantum_Queen_Supertrend_EA.mq5) | Multi-Strategy / XAUUSD & FX | - |
-| [`Experts/XAUUSD_Advanced_Grid_EA.mq5`](Experts/XAUUSD_Advanced_Grid_EA.mq5) | Grid / XAUUSD | [`presets/Advanced_Grid/`](presets/Advanced_Grid/) |
-| [`Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5`](Experts/XAUUSD_Adaptive_MeanReversion_EA.mq5) | Mean Reversion / XAUUSD | [`presets/MeanReversion_Grid/`](presets/MeanReversion_Grid/) |
-| [`Experts/MACD_Martingale_Grid.mq5`](Experts/MACD_Martingale_Grid.mq5) | Grid / Multi-Asset | - |
-| [`Experts/ORC_Crypto_Ichimoku_H4_EA.mq5`](Experts/ORC_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | - |
-| [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | - |
+| [`Experts/Zerith_Supertrend_MultiStrategy_EA.mq5`](Experts/Zerith_Supertrend_MultiStrategy_EA.mq5) | Supertrend + 12 MTF DeMarker Matrix / XAUUSD & FX | Multi-Strategy Portfolio Engine with Smart Recovery Grid & Dynamic ATR Spacing |
+| [`Experts/Zerith_London_Breakout_Recovery_EA.mq5`](Experts/Zerith_London_Breakout_Recovery_EA.mq5) | London Session Range Breakout (ORB) / GBPUSD & FX | Asian/London Box Breakout with OCO Cancellation & Smart Recovery System |
+| [`Experts/Zerith_Gold_Advanced_Grid_EA.mq5`](Experts/Zerith_Gold_Advanced_Grid_EA.mq5) | Advanced Dynamic Grid / XAUUSD | Multi-Tier Dynamic Grid with ATR Volatility Adaptation |
+| [`Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5`](Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5) | Mean Reversion Grid / XAUUSD | Adaptive Statistical Mean Reversion on Gold |
+| [`Experts/Zerith_MACD_Martingale_Grid_EA.mq5`](Experts/Zerith_MACD_Martingale_Grid_EA.mq5) | Trend Momentum Grid / Multi-Asset | MACD Zero-Cross Trend Following Grid |
+| [`Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5`](Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | H4 Multi-Timeframe Ichimoku Kinko Hyo Cloud Breakout |
+| [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | Webhook / Telegram Signal Execution Engine |
 
 ### Indicators (TradingView / Pine Script)
 | File | Platform | Description |
 | :--- | :--- | :--- |
-| [`Indicators/Quantum_Queen_Supertrend_Signal.pine`](Indicators/Quantum_Queen_Supertrend_Signal.pine) | TradingView (Pine Script v6) | Quantum Queen X 4.3 12-Strategy MTF DeMarker Engine with Supertrend Main Trend Filter |
-| [`Indicators/Supertrend_DeMarker_StochRSI_Signal.pine`](Indicators/Supertrend_DeMarker_StochRSI_Signal.pine) | TradingView (Pine Script v6) | Supertrend Main Trend + DeMarker & Stoch RSI Entry with 10-bar cooldown filter |
+| [`Indicators/Zerith_Supertrend_DeMarker_Signal.pine`](Indicators/Zerith_Supertrend_DeMarker_Signal.pine) | TradingView (Pine Script v6) | 12-Strategy MTF DeMarker Engine with Supertrend Trend Filter & Live Dashboard |
+| [`Indicators/Zerith_Supertrend_StochRSI_Signal.pine`](Indicators/Zerith_Supertrend_StochRSI_Signal.pine) | TradingView (Pine Script v6) | Supertrend Trend Following + DeMarker & Stoch RSI Entry with Cooldown & Anti-Sideway Filters |
 
 ### Scripts
 | File | Description |
