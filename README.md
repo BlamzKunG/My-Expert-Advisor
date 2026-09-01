@@ -17,6 +17,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_Crypto_Ichimoku_H4_EA.mq5
 │   ├── Zerith_Gold_Adaptive_MeanReversion_EA.mq5
 │   ├── Zerith_Gold_Advanced_Grid_EA.mq5
+│   ├── Zerith_Gold_Trade_Pro_EA.mq5
 │   ├── Zerith_London_Breakout_Recovery_EA.mq5
 │   ├── Zerith_MACD_Martingale_Grid_EA.mq5
 │   └── Zerith_Supertrend_MultiStrategy_EA.mq5
@@ -45,6 +46,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors (Zerith Series)
 | File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
+| [`Experts/Zerith_Gold_Trade_Pro_EA.mq5`](Experts/Zerith_Gold_Trade_Pro_EA.mq5) | Daily Support/Resistance Breakout / XAUUSD | 7 Daily Breakout Modules with Multi-Stage Trailing Stop & Drawdown Protection |
 | [`Experts/Zerith_Supertrend_MultiStrategy_EA.mq5`](Experts/Zerith_Supertrend_MultiStrategy_EA.mq5) | Supertrend + 12 MTF DeMarker Matrix / XAUUSD & FX | Multi-Strategy Portfolio Engine with Smart Recovery Grid & Dynamic ATR Spacing |
 | [`Experts/Zerith_London_Breakout_Recovery_EA.mq5`](Experts/Zerith_London_Breakout_Recovery_EA.mq5) | London Session Range Breakout (ORB) / GBPUSD & FX | Asian/London Box Breakout with OCO Cancellation & Smart Recovery System |
 | [`Experts/Zerith_Gold_Advanced_Grid_EA.mq5`](Experts/Zerith_Gold_Advanced_Grid_EA.mq5) | Advanced Dynamic Grid / XAUUSD | Multi-Tier Dynamic Grid with ATR Volatility Adaptation |
