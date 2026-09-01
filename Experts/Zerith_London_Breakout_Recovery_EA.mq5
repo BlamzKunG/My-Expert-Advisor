@@ -5,9 +5,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Zerith Series / Bogdan Puscasu Architecture"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.70"
+#property version   "1.80"
 #property description "Zerith London Breakout Recovery MT5 - Asian/London Session Box Range Breakout (ORB)"
-#property description "Pure Price Action Breakout with OCO Order Cancellation, Expiry Management & Smart Recovery"
+#property description "Features Drawdown & Daily Loss Capital Protection, OCO Cancellation & Smart Recovery"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -55,7 +55,15 @@ input bool              InpSmartRecovery      = true;                 // Activat
 input double            InpRecoveryMultiplier = 1.7;                  // Recovery Lot Multiplier
 input int               InpRecoveryMaxTimes   = 3;                    // Max Recovery Multiplier Times
 
-input group ">>>> 4. Trading Days & Filters"
+input group ">>>> 4. Drawdown & Capital Protection (DD Protection)"
+input bool              InpEnableDDProtection         = true;         // Enable Drawdown & Capital Protection
+input double            InpMaxTotalDDPercent          = 15.0;         // Max Total Floating DD % (Relative to Balance)
+input double            InpMaxDailyLossPercent        = 5.0;          // Max Daily Loss % (Realized + Floating, Prop-firm Safe)
+input double            InpMaxDDMoney                 = 0.0;          // Max Floating Loss in Currency (0 = Disabled)
+input bool              InpCloseAllOnDDBreach         = true;         // Close All Positions & Orders on DD Breach
+input bool              InpPauseTradingAfterDDBreach  = true;         // Pause Trading for Remainder of Day on DD Breach
+
+input group ">>>> 5. Trading Days & Filters"
 input ENUM_ON_OFF       InpTradeFriday        = STATUS_DISABLE;       // Trade Friday (Disable avoids weekend gap)
 input bool              InpDisableNFP         = true;                 // Disable trading on NFP Friday (1st Friday)
 input ulong             InpMagicNumber        = 777888;               // Magic Number
@@ -69,13 +77,21 @@ COrderInfo     g_ord;
 CAccountInfo   g_acc;
 CSymbolInfo    g_sym;
 
-datetime       g_last_box_date       = 0;
-double         g_box_high            = 0.0;
-double         g_box_low             = 0.0;
-bool           g_box_calculated      = false;
-bool           g_buy_pending_placed  = false;
-bool           g_sell_pending_placed = false;
-int            g_consecutive_losses  = 0;
+datetime       g_last_box_date            = 0;
+double         g_box_high                 = 0.0;
+double         g_box_low                  = 0.0;
+bool           g_box_calculated           = false;
+bool           g_buy_pending_placed       = false;
+bool           g_sell_pending_placed      = false;
+int            g_consecutive_losses       = 0;
+
+// DD Protection Tracking
+datetime       g_last_daily_reset_date    = 0;
+bool           g_dd_protection_tripped    = false;
+double         g_current_floating_loss    = 0.0;
+double         g_current_floating_dd_pct  = 0.0;
+double         g_today_realized_loss      = 0.0;
+double         g_today_total_loss_pct     = 0.0;
 
 //+------------------------------------------------------------------+
 //| Calculate Lot Size Based on Risk Level & Smart Recovery          |
@@ -121,6 +137,10 @@ double CalculateOrderLot()
 //+------------------------------------------------------------------+
 bool IsTradingAllowed()
   {
+   // If Drawdown Protection was tripped and pausing is enabled
+   if(g_dd_protection_tripped && InpPauseTradingAfterDDBreach)
+      return false;
+
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
 
@@ -184,7 +204,7 @@ bool CalculateRangeBox()
       g_buy_pending_placed  = false;
       g_sell_pending_placed = false;
 
-      PrintFormat("📦 [Quantum Emperor] Range Box Calculated for %s: High = %.2f, Low = %.2f (Range: %.1f pts)",
+      PrintFormat("📦 [Zerith London] Range Box Calculated for %s: High = %.2f, Low = %.2f (Range: %.1f pts)",
                   today_str, g_box_high, g_box_low, (g_box_high - g_box_low) / g_sym.Point());
       return true;
      }
@@ -225,6 +245,118 @@ int CountPendingOrders(ENUM_ORDER_TYPE &ord_type, ulong &ticket)
         }
      }
    return count;
+  }
+
+//+------------------------------------------------------------------+
+//| Close All Positions and Delete Pending Orders                    |
+//+------------------------------------------------------------------+
+void CloseAllPositionsAndOrders(string reason)
+  {
+   PrintFormat("🚨 [Capital Protection] Executing Emergency Close! Reason: %s", reason);
+
+   // 1. Close Open Positions
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() == InpMagicNumber && g_pos.Symbol() == _Symbol)
+        {
+         ulong ticket = g_pos.Ticket();
+         g_trade.PositionClose(ticket);
+        }
+     }
+
+   // 2. Delete Pending Orders
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!g_ord.SelectByIndex(i)) continue;
+      if(g_ord.Magic() == InpMagicNumber && g_ord.Symbol() == _Symbol)
+        {
+         ulong ticket = g_ord.Ticket();
+         g_trade.OrderDelete(ticket);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Check and Enforce Drawdown & Daily Capital Protection            |
+//+------------------------------------------------------------------+
+void CheckAndEnforceDrawdownProtection()
+  {
+   datetime now = TimeCurrent();
+   string today_str = TimeToString(now, TIME_DATE);
+   datetime today_midnight = StringToTime(today_str + " 00:00");
+
+   // Daily Reset of Protection flag at midnight 00:00
+   if(g_last_daily_reset_date != today_midnight)
+     {
+      g_last_daily_reset_date = today_midnight;
+      g_dd_protection_tripped = false;
+     }
+
+   double balance = g_acc.Balance();
+   if(balance <= 0.0) return;
+
+   // 1. Calculate Current Floating Profit/Loss for this EA
+   double floating_pl = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!g_pos.SelectByIndex(i)) continue;
+      if(g_pos.Magic() == InpMagicNumber && g_pos.Symbol() == _Symbol)
+        {
+         floating_pl += g_pos.Profit() + g_pos.Swap();
+        }
+     }
+
+   g_current_floating_loss   = (floating_pl < 0.0) ? MathAbs(floating_pl) : 0.0;
+   g_current_floating_dd_pct = (g_current_floating_loss / balance) * 100.0;
+
+   // 2. Calculate Realized P/L for Today (from 00:00 to now)
+   double today_realized_pl = 0.0;
+   if(HistorySelect(today_midnight, now))
+     {
+      int deals = HistoryDealsTotal();
+      for(int i = 0; i < deals; i++)
+        {
+         ulong deal_ticket = HistoryDealGetTicket(i);
+         if(deal_ticket == 0) continue;
+         if(HistoryDealGetInteger(deal_ticket, DEAL_MAGIC) != InpMagicNumber) continue;
+         if(HistoryDealGetString(deal_ticket, DEAL_SYMBOL) != _Symbol) continue;
+         if(HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+
+         today_realized_pl += HistoryDealGetDouble(deal_ticket, DEAL_PROFIT) + HistoryDealGetDouble(deal_ticket, DEAL_SWAP);
+        }
+     }
+
+   g_today_realized_loss = (today_realized_pl < 0.0) ? MathAbs(today_realized_pl) : 0.0;
+   double total_today_loss = g_today_realized_loss + g_current_floating_loss;
+   g_today_total_loss_pct = (total_today_loss / balance) * 100.0;
+
+   if(!InpEnableDDProtection)
+      return;
+
+   // 3. Evaluate Breach Conditions
+   bool breach_total_dd = (InpMaxTotalDDPercent > 0.0 && g_current_floating_dd_pct >= InpMaxTotalDDPercent);
+   bool breach_money_dd = (InpMaxDDMoney > 0.0 && g_current_floating_loss >= InpMaxDDMoney);
+   bool breach_daily_dd = (InpMaxDailyLossPercent > 0.0 && g_today_total_loss_pct >= InpMaxDailyLossPercent);
+
+   if(breach_total_dd || breach_money_dd || breach_daily_dd)
+     {
+      if(!g_dd_protection_tripped)
+        {
+         string reason = "";
+         if(breach_total_dd)
+            reason = StringFormat("Total Floating DD reached %.2f%% (Limit: %.2f%%)", g_current_floating_dd_pct, InpMaxTotalDDPercent);
+         else if(breach_money_dd)
+            reason = StringFormat("Floating Loss reached $%.2f (Limit: $%.2f)", g_current_floating_loss, InpMaxDDMoney);
+         else if(breach_daily_dd)
+            reason = StringFormat("Daily Total Loss reached %.2f%% (Limit: %.2f%%)", g_today_total_loss_pct, InpMaxDailyLossPercent);
+
+         g_dd_protection_tripped = true;
+
+         if(InpCloseAllOnDDBreach)
+            CloseAllPositionsAndOrders(reason);
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -357,7 +489,7 @@ void PlaceBreakoutOrders()
      {
       if(g_trade.BuyStop(volume, buy_stop_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_SPECIFIED, expire_time, InpEAComment + " [BuyStop]"))
         {
-         PrintFormat("👑 [Quantum Emperor] Placed BUY STOP at %.2f (Box High: %.2f + %.1f pts) Lot: %.2f TP: %.2f",
+         PrintFormat("👑 [Zerith London] Placed BUY STOP at %.2f (Box High: %.2f + %.1f pts) Lot: %.2f TP: %.2f",
                      buy_stop_price, g_box_high, InpAbovePoints, volume, buy_tp);
          g_buy_pending_placed = true;
         }
@@ -368,7 +500,7 @@ void PlaceBreakoutOrders()
      {
       if(g_trade.SellStop(volume, sell_stop_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_SPECIFIED, expire_time, InpEAComment + " [SellStop]"))
         {
-         PrintFormat("👑 [Quantum Emperor] Placed SELL STOP at %.2f (Box Low: %.2f - %.1f pts) Lot: %.2f TP: %.2f",
+         PrintFormat("👑 [Zerith London] Placed SELL STOP at %.2f (Box Low: %.2f - %.1f pts) Lot: %.2f TP: %.2f",
                      sell_stop_price, g_box_low, InpBelowPoints, volume, sell_tp);
          g_sell_pending_placed = true;
         }
@@ -385,20 +517,33 @@ void DrawDashboard()
    ENUM_ORDER_TYPE ord_type; ulong t;
    int pending_orders = CountPendingOrders(ord_type, t);
 
+   string dd_status = "OFF";
+   if(InpEnableDDProtection)
+     {
+      dd_status = g_dd_protection_tripped ? "TRIPPED (TRADING PAUSED)" : "ACTIVE (NORMAL)";
+     }
+
    string text = StringFormat("--- ZERITH LONDON BREAKOUT RECOVERY EA ---\n"
-                              "Trading Allowed: %s\n"
+                              "Trading Status: %s\n"
                               "Session Box: %s - %s (High: %.2f | Low: %.2f)\n"
                               "Risk Level: %s | Next Order Lot: %.2f\n"
                               "Smart Recovery: %s (Loss Streak: %d / %d)\n"
                               "Active Positions: %d | Pending Orders: %d\n"
                               "Take Profit: %.0f pts | Expiry Time: %s\n"
+                              "------------------------------------------\n"
+                              "DD Protection: %s\n"
+                              "Current Floating DD: $%.2f (%.2f%% / Max %.1f%%)\n"
+                              "Today Total Loss: %.2f%% (Max Daily %.1f%%)\n"
                               "Account Equity: $%.2f | Balance: $%.2f",
-                              (IsTradingAllowed() ? "YES" : "NO (Filter Active)"),
+                              (IsTradingAllowed() ? "ACTIVE (ALLOW TRADING)" : (g_dd_protection_tripped ? "PAUSED (DD BREACH)" : "FILTER ACTIVE")),
                               InpBoxStart, InpBoxEnd, g_box_high, g_box_low,
                               EnumToString(InpRiskLevel), CalculateOrderLot(),
                               (InpSmartRecovery ? "ACTIVE" : "OFF"), g_consecutive_losses, InpRecoveryMaxTimes,
                               open_pos, pending_orders,
                               InpTakeProfit, InpExpirePendingTime,
+                              dd_status,
+                              g_current_floating_loss, g_current_floating_dd_pct, InpMaxTotalDDPercent,
+                              g_today_total_loss_pct, InpMaxDailyLossPercent,
                               g_acc.Equity(), g_acc.Balance());
    Comment(text);
   }
@@ -418,14 +563,16 @@ int OnInit()
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetTypeFillingBySymbol(_Symbol);
 
-   g_last_box_date       = 0;
-   g_box_high            = 0.0;
-   g_box_low             = 0.0;
-   g_box_calculated      = false;
-   g_buy_pending_placed  = false;
-   g_sell_pending_placed = false;
+   g_last_box_date         = 0;
+   g_last_daily_reset_date = 0;
+   g_box_high              = 0.0;
+   g_box_low               = 0.0;
+   g_box_calculated        = false;
+   g_buy_pending_placed    = false;
+   g_sell_pending_placed   = false;
+   g_dd_protection_tripped = false;
 
-   Print("Zerith London Breakout Recovery EA MT5 successfully initialized.");
+   Print("Zerith London Breakout Recovery EA MT5 (with DD Protection) successfully initialized.");
    return INIT_SUCCEEDED;
   }
 
@@ -444,29 +591,32 @@ void OnTick()
   {
    g_sym.RefreshRates();
 
-   // 1. Filter: Check if day/time is allowed
+   // 1. Enforce Drawdown & Daily Capital Protection
+   CheckAndEnforceDrawdownProtection();
+
+   // 2. Filter: Check if day/time is allowed
    if(!IsTradingAllowed())
      {
       DrawDashboard();
       return;
      }
 
-   // 2. Manage OCO Order Cancellation (If one side opens, cancel the other)
+   // 3. Manage OCO Order Cancellation (If one side opens, cancel the other)
    HandleCancelOppositeOrders();
 
-   // 3. Manage Pending Order Expiration at Ex_Pend
+   // 4. Manage Pending Order Expiration at Ex_Pend
    HandlePendingOrderExpiration();
 
-   // 4. Update Loss/Recovery tracking from deal history
+   // 5. Update Loss/Recovery tracking from deal history
    UpdateHistoryLossTracking();
 
-   // 5. Calculate Asian/London Session Box Range
+   // 6. Calculate Asian/London Session Box Range
    CalculateRangeBox();
 
-   // 6. Place Buy Stop / Sell Stop Breakout Orders
+   // 7. Place Buy Stop / Sell Stop Breakout Orders
    PlaceBreakoutOrders();
 
-   // 7. Render Chart Dashboard
+   // 8. Render Chart Dashboard
    DrawDashboard();
   }
 //+------------------------------------------------------------------+
