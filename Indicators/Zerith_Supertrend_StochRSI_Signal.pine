@@ -1,5 +1,5 @@
 //@version=6
-indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", overlay=true)
+indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", overlay=true, max_bars_back=500)
 
 // =============================================================================
 // 1. MASTER TREND FILTER SETTINGS
@@ -92,13 +92,17 @@ plotDonchianLevels  = input.bool(false, "Plot Donchian S/R Levels", group=grp_ui
 // =============================================================================
 // 6. NATIVE REAL-TIME INDICATOR CALCULATIONS (ZERO-LAG)
 // =============================================================================
-// 6.1 Chart Supertrend
+// 6.1 Chart Supertrend (Computed Directly from Local Price Series)
 [stValue, stDirection] = ta.supertrend(atrMultiplier, atrPeriod)
 isUptrend   = stDirection < 0
 isDowntrend = stDirection > 0
 
-// 6.2 Higher Timeframe (HTF) Supertrend
-[htfSTVal, htfSTDir] = request.security(syminfo.tickerid, htfTimeframe, ta.supertrend(htfAtrMult, htfAtrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+// 6.2 Higher Timeframe (HTF) Supertrend (Only if HTF mode is requested)
+f_calc_htf_st() =>
+    ta.supertrend(htfAtrMult, htfAtrPeriod)
+
+bool needHTF = (trendMode == "Higher Timeframe (HTF) Supertrend" or trendMode == "Dual Supertrend (Chart + HTF)")
+[htfSTVal, htfSTDir] = needHTF ? request.security(syminfo.tickerid, htfTimeframe, f_calc_htf_st(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off) : [stValue, stDirection]
 htfIsUp   = htfSTDir < 0
 htfIsDown = htfSTDir > 0
 
@@ -132,14 +136,14 @@ if useEma200 and trendMode != "200 EMA Baseline"
     allowBuyTrend  := allowBuyTrend and emaIsUp
     allowSellTrend := allowSellTrend and emaIsDown
 
-// 6.4 DeMarker Calculation
+// 6.4 DeMarker Calculation (Direct Local Series)
 deMax = high > high[1] ? high - high[1] : 0.0
 deMin = low < low[1] ? low[1] - low : 0.0
 avgDeMax = ta.sma(deMax, demPeriod)
 avgDeMin = ta.sma(deMin, demPeriod)
 demValue = (avgDeMax + avgDeMin) != 0.0 ? avgDeMax / (avgDeMax + avgDeMin) : 0.5
 
-// 6.5 Stochastic RSI Calculation
+// 6.5 Stochastic RSI Calculation (Direct Local Series)
 rsiVal = ta.rsi(close, rsiLength)
 stochRsi = ta.stoch(rsiVal, rsiVal, rsiVal, stochLength)
 k = ta.sma(stochRsi, smoothK)
@@ -223,17 +227,19 @@ else if signalMode == "Momentum Continuation"
     rawSellSignal := stochSellCross and k > 40.0 and demValue < 0.6
 
 // Cooldown & Filtered Signal Execution
-var int lastSignalBar = -100
-barsSinceLast = bar_index - lastSignalBar
+var int lastSignalBar = -1000
+int barsSinceLast = bar_index - lastSignalBar
 
-validBuy  = rawBuySignal and allowBuyTrend and allFiltersPass_Buy and (minBarsBetweenSignals <= 0 or barsSinceLast >= minBarsBetweenSignals)
-validSell = rawSellSignal and allowSellTrend and allFiltersPass_Sell and (minBarsBetweenSignals <= 0 or barsSinceLast >= minBarsBetweenSignals)
+bool canFireSignal = (minBarsBetweenSignals <= 0) or (barsSinceLast >= minBarsBetweenSignals)
+
+validBuy  = rawBuySignal and allowBuyTrend and allFiltersPass_Buy and canFireSignal
+validSell = rawSellSignal and allowSellTrend and allFiltersPass_Sell and canFireSignal
 
 if validBuy or validSell
     lastSignalBar := bar_index
 
 // =============================================================================
-// 9. PLOTTING & VISUALIZATION (NATIVE CHART SYNCHRONIZATION)
+// 9. PLOTTING & VISUALIZATION (100% NATIVE CANDLE BINDING)
 // =============================================================================
 // 9.1 Supertrend Line
 plot(plotSupertrendLine and isUptrend ? stValue : na, "Supertrend Uptrend", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
