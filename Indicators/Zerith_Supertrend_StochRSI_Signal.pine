@@ -1,120 +1,193 @@
 //@version=6
-indicator("Supertrend + DeMarker + Stoch RSI (Donchian & Volume Pro Edition)", overlay=true)
+indicator("Zerith - Supertrend + DeMarker + Stoch RSI Multi-TF Signal Pro", overlay=true)
 
 // =============================================================================
-// 1. BASE SETTINGS
+// 1. MASTER TREND FILTER CONFIGURATION
 // =============================================================================
-// 1.1 Supertrend (Main Trend)
-atrPeriod       = input.int(10, "Supertrend ATR Period", group="1. Supertrend (Main Trend)")
-atrMultiplier   = input.float(3.0, "Supertrend Multiplier", step=0.1, group="1. Supertrend (Main Trend)")
+grp_trend = "1. Master Trend Filter Settings"
+useTrendFilter      = input.bool(true, "Enable Master Trend Filter", group=grp_trend)
+trendMode           = input.string("Supertrend (Custom TF)", "Trend Filter Engine", 
+                      options=["Supertrend (Custom TF)", "Higher Timeframe (HTF) Supertrend", "EMA Baseline (e.g. EMA 200)", "Dual Supertrend (Chart + HTF)", "None (Raw Reversal Mode)"], group=grp_trend)
 
-// 1.2 DeMarker
-demPeriod       = input.int(14, "DeMarker Period", group="2. DeMarker")
-demOversold     = input.float(0.3, "DeMarker Oversold Level", step=0.05, group="2. DeMarker")
-demOverbought   = input.float(0.7, "DeMarker Overbought Level", step=0.05, group="2. DeMarker")
+// 1.1 Base Supertrend
+stTimeframe         = input.timeframe("", "Supertrend Timeframe (Empty = Chart TF)", group=grp_trend)
+atrPeriod           = input.int(10, "Supertrend ATR Period", group=grp_trend)
+atrMultiplier       = input.float(3.0, "Supertrend Multiplier", step=0.1, group=grp_trend)
 
-// 1.3 Stochastic RSI
-rsiLength       = input.int(14, "RSI Length", group="3. Stoch RSI")
-stochLength     = input.int(14, "Stoch Length", group="3. Stoch RSI")
-smoothK         = input.int(3, "Smooth K", group="3. Stoch RSI")
-smoothD         = input.int(3, "Smooth D", group="3. Stoch RSI")
-stochOversold   = input.float(25.0, "Stoch RSI Oversold Zone", group="3. Stoch RSI")
-stochOverbought = input.float(75.0, "Stoch RSI Overbought Zone", group="3. Stoch RSI")
+// 1.2 Higher Timeframe Supertrend (For Dual/HTF mode)
+htfTimeframe        = input.timeframe("60", "Higher Timeframe (HTF)", group=grp_trend)
+htfAtrPeriod        = input.int(10, "HTF ATR Period", group=grp_trend)
+htfAtrMult          = input.float(3.0, "HTF Multiplier", step=0.1, group=grp_trend)
 
-// 1.4 Signal Spacing Cooldown
-minBarsBetweenSignals = input.int(10, "Min Distance Between Signals (Bars)", minval=1, group="4. Basic Filter")
-
-// =============================================================================
-// 2. STRUCTURAL & VOLUME FILTERS (ANTI-SIDEWAY)
-// =============================================================================
-// 2.1 Donchian / Swing Breakout (Price Action Filter)
-useDonchian     = input.bool(true, "Enable Donchian / Swing Breakout Confirmation", group="5. Donchian / Swing Breakout Filter")
-donchianPeriod  = input.int(20, "Donchian Lookback Period (Bars)", minval=2, group="5. Donchian / Swing Breakout Filter")
-breakoutByClose = input.bool(false, "Require Close Breakout (True=Close, False=High/Low)", group="5. Donchian / Swing Breakout Filter")
-
-// 2.2 Volume Expansion / RVOL Filter
-useVolume       = input.bool(true, "Enable Volume Expansion Filter", group="6. Volume RVOL Filter")
-volumeMaLen     = input.int(20, "Volume MA Length", minval=1, group="6. Volume RVOL Filter")
-volumeMult      = input.float(1.2, "Min Volume Multiplier (x MA)", step=0.1, group="6. Volume RVOL Filter")
+// 1.3 EMA Baseline Filter
+useEmaTrend         = input.bool(false, "Enable 200 EMA Baseline Filter", group=grp_trend)
+emaTimeframe        = input.timeframe("", "EMA Baseline Timeframe", group=grp_trend)
+emaLength           = input.int(200, "EMA Baseline Length", group=grp_trend)
 
 // =============================================================================
-// 3. OPTIONAL MATHEMATICAL SIDEWAY FILTERS
+// 2. SIGNAL GENERATORS: DEMARKER & STOCHASTIC RSI
 // =============================================================================
-// 3.1 Kaufman's Efficiency Ratio (KER)
-useER           = input.bool(false, "Enable Kaufman's Efficiency Ratio (KER)", group="7. Optional Math Filters")
-erPeriod        = input.int(14, "KER Period", group="7. Optional Math Filters")
-minER           = input.float(0.30, "Min Efficiency Ratio", step=0.05, group="7. Optional Math Filters")
+grp_signal = "2. Signal Engines (DeMarker & Stoch RSI)"
+signalMode          = input.string("Combined (DeMarker + Stoch RSI)", "Entry Signal Mode",
+                      options=["Combined (DeMarker + Stoch RSI)", "DeMarker Only", "Stoch RSI Only", "Momentum Continuation (Trend + Stoch Cross)"], group=grp_signal)
 
-// 3.2 Choppiness Index (CHOP)
-useChop         = input.bool(false, "Enable Choppiness Index (CHOP)", group="7. Optional Math Filters")
-chopLen         = input.int(14, "CHOP Length", group="7. Optional Math Filters")
-maxChop         = input.float(55.0, "Max CHOP Level (Below = Trending)", group="7. Optional Math Filters")
+// 2.1 DeMarker Settings
+useDeMarker         = input.bool(true, "Enable DeMarker Module", group=grp_signal)
+demTimeframe        = input.timeframe("", "DeMarker Timeframe (Empty = Chart TF)", group=grp_signal)
+demPeriod           = input.int(14, "DeMarker Period", group=grp_signal)
+demOversold         = input.float(0.3, "DeMarker Oversold Level", step=0.05, group=grp_signal)
+demOverbought       = input.float(0.7, "DeMarker Overbought Level", step=0.05, group=grp_signal)
 
-// 3.3 Bollinger Bands Width (BBW Volatility Filter)
-useBBW          = input.bool(false, "Enable Bollinger Bands Width Filter", group="7. Optional Math Filters")
-bbLength        = input.int(20, "BB Length", group="7. Optional Math Filters")
-bbMult          = input.float(2.0, "BB Multiplier", group="7. Optional Math Filters")
-bbSmaLen        = input.int(50, "BBW Average Period", group="7. Optional Math Filters")
+// 2.2 Stochastic RSI Settings
+useStochRsi         = input.bool(true, "Enable Stoch RSI Module", group=grp_signal)
+stochTimeframe      = input.timeframe("", "Stoch RSI Timeframe (Empty = Chart TF)", group=grp_signal)
+rsiLength           = input.int(14, "RSI Length", group=grp_signal)
+stochLength         = input.int(14, "Stoch Length", group=grp_signal)
+smoothK             = input.int(3, "Smooth K", group=grp_signal)
+smoothD             = input.int(3, "Smooth D", group=grp_signal)
+stochOversold       = input.float(25.0, "Stoch RSI Oversold Zone", group=grp_signal)
+stochOverbought     = input.float(75.0, "Stoch RSI Overbought Zone", group=grp_signal)
 
-// 3.4 EMA Ribbon Spread (%)
-useEMASpread    = input.bool(false, "Enable EMA Spread % Filter", group="7. Optional Math Filters")
-emaFastLen      = input.int(20, "EMA Fast Length", group="7. Optional Math Filters")
-emaSlowLen      = input.int(50, "EMA Slow Length", group="7. Optional Math Filters")
-minSpreadPct    = input.float(0.15, "Min EMA Spread %", step=0.05, group="7. Optional Math Filters")
-
-// 3.5 Multi-Timeframe Supertrend (MTF)
-useMTF_ST       = input.bool(false, "Enable Higher Timeframe Supertrend", group="7. Optional Math Filters")
-htfTimeframe    = input.timeframe("60", "Higher Timeframe", group="7. Optional Math Filters")
-htfAtrPeriod    = input.int(10, "HTF ATR Period", group="7. Optional Math Filters")
-htfAtrMult      = input.float(3.0, "HTF Multiplier", step=0.1, group="7. Optional Math Filters")
-
-// 3.6 Dashboard
-showDashboard   = input.bool(true, "Show Filter Status Dashboard", group="8. Dashboard")
+// 2.3 Signal Spacing Cooldown
+minBarsCooldown     = input.int(10, "Min Distance Between Signals (Bars, 0=Off)", minval=0, group=grp_signal)
 
 // =============================================================================
-// 4. INDICATOR CALCULATIONS
+// 3. STRUCTURAL & ANTI-SIDEWAY FILTERS
 // =============================================================================
-// 4.1 Base Supertrend
-[stValue, stDirection] = ta.supertrend(atrMultiplier, atrPeriod)
-isUptrend   = stDirection < 0
-isDowntrend = stDirection > 0
+grp_struct = "3. Structural & Volume Filters"
+useDonchian         = input.bool(true, "Enable Donchian Swing Breakout Filter", group=grp_struct)
+donchianPeriod      = input.int(20, "Donchian Lookback Period (Bars)", minval=2, group=grp_struct)
+breakoutByClose     = input.bool(false, "Require Close Breakout (True=Close, False=High/Low)", group=grp_struct)
 
-// 4.2 DeMarker
-deMax = high > high[1] ? high - high[1] : 0.0
-deMin = low < low[1] ? low[1] - low : 0.0
-avgDeMax = ta.sma(deMax, demPeriod)
-avgDeMin = ta.sma(deMin, demPeriod)
-demValue = (avgDeMax + avgDeMin) != 0 ? avgDeMax / (avgDeMax + avgDeMin) : 0.5
-
-// 4.3 Stochastic RSI
-rsiVal = ta.rsi(close, rsiLength)
-stochRsi = ta.stoch(rsiVal, rsiVal, rsiVal, stochLength)
-k = ta.sma(stochRsi, smoothK)
-d = ta.sma(k, smoothD)
+useVolume           = input.bool(true, "Enable Volume Expansion (RVOL) Filter", group=grp_struct)
+volumeMaLen         = input.int(20, "Volume MA Length", minval=1, group=grp_struct)
+volumeMult          = input.float(1.2, "Min Volume Multiplier (x MA)", step=0.1, group=grp_struct)
 
 // =============================================================================
-// 5. ANTI-SIDEWAY & STRUCTURAL FILTER CALCULATIONS
+// 4. OPTIONAL ADVANCED FILTERS
 // =============================================================================
-// 5.1 Donchian / Swing High-Low Breakout
+grp_opt = "4. Optional Sideway & Math Filters"
+useER               = input.bool(false, "Enable Kaufman's Efficiency Ratio (KER)", group=grp_opt)
+erPeriod            = input.int(14, "KER Period", group=grp_opt)
+minER               = input.float(0.30, "Min Efficiency Ratio", step=0.05, group=grp_opt)
+
+useChop             = input.bool(false, "Enable Choppiness Index (CHOP)", group=grp_opt)
+chopLen             = input.int(14, "CHOP Length", group=grp_opt)
+maxChop             = input.float(55.0, "Max CHOP Level (Below = Trending)", group=grp_opt)
+
+useBBW              = input.bool(false, "Enable Bollinger Bands Width Filter", group=grp_opt)
+bbLength            = input.int(20, "BB Length", group=grp_opt)
+bbMult              = input.float(2.0, "BB Multiplier", group=grp_opt)
+bbSmaLen            = input.int(50, "BBW Average Period", group=grp_opt)
+
+useEMASpread        = input.bool(false, "Enable EMA Spread % Filter", group=grp_opt)
+emaFastLen          = input.int(20, "EMA Fast Length", group=grp_opt)
+emaSlowLen          = input.int(50, "EMA Slow Length", group=grp_opt)
+minSpreadPct        = input.float(0.15, "Min EMA Spread %", step=0.05, group=grp_opt)
+
+// =============================================================================
+// 5. VISUALS & DASHBOARD
+// =============================================================================
+grp_ui = "5. Display & Dashboard"
+showDashboard       = input.bool(true, "Show Filter Status Dashboard", group=grp_ui)
+dashboardPosition   = input.string("Top Right", "Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_ui)
+plotSupertrendLine  = input.bool(true, "Plot Supertrend Line on Chart", group=grp_ui)
+plotEmaBaseline     = input.bool(true, "Plot EMA Baseline Line", group=grp_ui)
+plotDonchianLevels  = input.bool(false, "Plot Donchian S/R Levels", group=grp_ui)
+
+// =============================================================================
+// 6. MULTI-TIMEFRAME COMPUTATIONS (SECURITY WRAPPERS)
+// =============================================================================
+// 6.1 Multi-Timeframe Supertrend Calculation
+calcSupertrend(float mult, int len) =>
+    ta.supertrend(mult, len)
+
+[raw_stVal, raw_stDir] = request.security(syminfo.tickerid, stTimeframe == "" ? timeframe.period : stTimeframe, calcSupertrend(atrMultiplier, atrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+stIsBull = raw_stDir < 0
+stIsBear = raw_stDir > 0
+
+// 6.2 Higher Timeframe Supertrend
+[raw_htfVal, raw_htfDir] = request.security(syminfo.tickerid, htfTimeframe, calcSupertrend(htfAtrMult, htfAtrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+htfIsBull = raw_htfDir < 0
+htfIsBear = raw_htfDir > 0
+
+// 6.3 EMA Baseline Calculation
+calcEma(int len) => ta.ema(close, len)
+raw_emaBaseline = request.security(syminfo.tickerid, emaTimeframe == "" ? timeframe.period : emaTimeframe, calcEma(emaLength), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+emaIsBull = close >= raw_emaBaseline
+emaIsBear = close <= raw_emaBaseline
+
+// Master Trend Filter Evaluation
+bool trendAllowsBuy  = true
+bool trendAllowsSell = true
+
+if useTrendFilter
+    if trendMode == "Supertrend (Custom TF)"
+        trendAllowsBuy  := stIsBull
+        trendAllowsSell := stIsBear
+    else if trendMode == "Higher Timeframe (HTF) Supertrend"
+        trendAllowsBuy  := htfIsBull
+        trendAllowsSell := htfIsBear
+    else if trendMode == "EMA Baseline (e.g. EMA 200)"
+        trendAllowsBuy  := emaIsBull
+        trendAllowsSell := emaIsBear
+    else if trendMode == "Dual Supertrend (Chart + HTF)"
+        trendAllowsBuy  := stIsBull and htfIsBull
+        trendAllowsSell := stIsBear and htfIsBear
+    else if trendMode == "None (Raw Reversal Mode)"
+        trendAllowsBuy  := true
+        trendAllowsSell := true
+
+if useEmaTrend and trendMode != "EMA Baseline (e.g. EMA 200)"
+    trendAllowsBuy  := trendAllowsBuy and emaIsBull
+    trendAllowsSell := trendAllowsSell and emaIsBear
+
+// =============================================================================
+// 7. DEMARKER & STOCHASTIC RSI (MULTI-TF CALCULATION)
+// =============================================================================
+// 7.1 DeMarker Function
+calcDeMarker(int len) =>
+    dMax = high > high[1] ? high - high[1] : 0.0
+    dMin = low < low[1] ? low[1] - low : 0.0
+    avgMax = ta.sma(dMax, len)
+    avgMin = ta.sma(dMin, len)
+    (avgMax + avgMin) != 0 ? avgMax / (avgMax + avgMin) : 0.5
+
+demValue = request.security(syminfo.tickerid, demTimeframe == "" ? timeframe.period : demTimeframe, calcDeMarker(demPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// 7.2 Stoch RSI Function
+calcStochRsi(int rLen, int sLen, int kSmooth, int dSmooth) =>
+    rVal = ta.rsi(close, rLen)
+    stVal = ta.stoch(rVal, rVal, rVal, sLen)
+    _k = ta.sma(stVal, kSmooth)
+    _d = ta.sma(_k, dSmooth)
+    [_k, _d]
+
+[kVal, dVal] = request.security(syminfo.tickerid, stochTimeframe == "" ? timeframe.period : stochTimeframe, calcStochRsi(rsiLength, stochLength, smoothK, smoothD), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// =============================================================================
+// 8. STRUCTURAL & ANTI-SIDEWAY FILTERS
+// =============================================================================
+// 8.1 Donchian Swing Breakout
 donchianHigh = ta.highest(high[1], donchianPeriod)
 donchianLow  = ta.lowest(low[1], donchianPeriod)
 
 passDonchian_Buy  = not useDonchian or (breakoutByClose ? (close >= donchianHigh) : (high >= donchianHigh))
 passDonchian_Sell = not useDonchian or (breakoutByClose ? (close <= donchianLow)  : (low <= donchianLow))
 
-// 5.2 Volume Expansion / RVOL
+// 8.2 Volume RVOL
 hasVolume    = not na(volume) and volume > 0
 volMa        = ta.sma(volume, volumeMaLen)
 volThreshold = volMa * volumeMult
 passVolume   = not useVolume or not hasVolume or (volume >= volThreshold)
 
-// 5.3 Kaufman's Efficiency Ratio
+// 8.3 Kaufman's Efficiency Ratio (KER)
 changeNet = math.abs(close - close[erPeriod])
 sumDiffs  = math.sum(math.abs(close - close[1]), erPeriod)
 effRatio  = sumDiffs != 0 ? (changeNet / sumDiffs) : 0.0
 passER    = not useER or (effRatio >= minER)
 
-// 5.4 Choppiness Index
+// 8.4 Choppiness Index (CHOP)
 hhChop    = ta.highest(high, chopLen)
 llChop    = ta.lowest(low, chopLen)
 rangeChop = hhChop - llChop
@@ -122,117 +195,143 @@ sumAtr1   = math.sum(ta.atr(1), chopLen)
 chopVal   = (rangeChop > 0 and sumAtr1 > 0) ? 100 * (math.log10(sumAtr1 / rangeChop) / math.log10(chopLen)) : 50.0
 passChop  = not useChop or (chopVal <= maxChop)
 
-// 5.5 Bollinger Bands Width
+// 8.5 Bollinger Bands Width (BBW)
 [bbBasis, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
 bbWidth   = bbBasis != 0 ? ((bbUpper - bbLower) / bbBasis) * 100 : 0.0
 bbWidthAvg= ta.sma(bbWidth, bbSmaLen)
 passBBW   = not useBBW or (bbWidth >= bbWidthAvg)
 
-// 5.6 EMA Spread
+// 8.6 EMA Ribbon Spread (%)
 emaFast   = ta.ema(close, emaFastLen)
 emaSlow   = ta.ema(close, emaSlowLen)
 emaSpread = close != 0 ? (math.abs(emaFast - emaSlow) / close) * 100 : 0.0
 passEMA   = not useEMASpread or (emaSpread >= minSpreadPct)
 
-// 5.7 MTF Supertrend
-[htfSTVal, htfSTDir] = request.security(syminfo.tickerid, htfTimeframe, ta.supertrend(htfAtrMult, htfAtrPeriod), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
-htfIsUp   = htfSTDir < 0
-htfIsDown = htfSTDir > 0
-passMTF_Buy  = not useMTF_ST or htfIsUp
-passMTF_Sell = not useMTF_ST or htfIsDown
-
-// Combine All Filter Validations
-allFiltersPass_Buy  = passDonchian_Buy and passVolume and passER and passChop and passBBW and passEMA and passMTF_Buy
-allFiltersPass_Sell = passDonchian_Sell and passVolume and passER and passChop and passBBW and passEMA and passMTF_Sell
+// All Filters Combination
+allFilters_Buy  = passDonchian_Buy and passVolume and passER and passChop and passBBW and passEMA
+allFilters_Sell = passDonchian_Sell and passVolume and passER and passChop and passBBW and passEMA
 
 // =============================================================================
-// 6. ENTRY SIGNAL LOGIC
+// 9. ENTRY SIGNAL EVALUATION
 // =============================================================================
-// Raw Triggers (Supertrend + Stoch RSI + DeMarker)
-stochBuyCross = ta.crossover(k, d) and (k <= stochOversold or k[1] <= stochOversold)
-demBuyCond    = demValue <= demOversold or demValue[1] <= demOversold or ta.crossover(demValue, demOversold)
-rawBuySignal  = isUptrend and stochBuyCross and demBuyCond
+// Stoch RSI Triggers
+stochBuyCross   = ta.crossover(kVal, dVal) and (kVal <= stochOversold or kVal[1] <= stochOversold or kVal <= 30.0)
+stochSellCross  = ta.crossunder(kVal, dVal) and (kVal >= stochOverbought or kVal[1] >= stochOverbought or kVal >= 70.0)
 
-stochSellCross = ta.crossunder(k, d) and (k >= stochOverbought or k[1] >= stochOverbought)
-demSellCond    = demValue >= demOverbought or demValue[1] >= demOverbought or ta.crossunder(demValue, demOverbought)
-rawSellSignal  = isDowntrend and stochSellCross and demSellCond
+// DeMarker Triggers
+demBuyCond      = not useDeMarker or (demValue <= demOversold or demValue[1] <= demOversold or ta.crossover(demValue, demOversold))
+demSellCond     = not useDeMarker or (demValue >= demOverbought or demValue[1] >= demOverbought or ta.crossunder(demValue, demOverbought))
 
-// Cooldown & Filtered Signal Execution
+bool rawBuyTrigger  = false
+bool rawSellTrigger = false
+
+if signalMode == "Combined (DeMarker + Stoch RSI)"
+    rawBuyTrigger  := (not useStochRsi or stochBuyCross) and demBuyCond
+    rawSellTrigger := (not useStochRsi or stochSellCross) and demSellCond
+else if signalMode == "DeMarker Only"
+    rawBuyTrigger  := ta.crossover(demValue, demOversold) or (demValue <= demOversold and demValue > demValue[1])
+    rawSellTrigger := ta.crossunder(demValue, demOverbought) or (demValue >= demOverbought and demValue < demValue[1])
+else if signalMode == "Stoch RSI Only"
+    rawBuyTrigger  := stochBuyCross
+    rawSellTrigger := stochSellCross
+else if signalMode == "Momentum Continuation (Trend + Stoch Cross)"
+    rawBuyTrigger  := ta.crossover(kVal, dVal) and kVal < 60.0 and demValue > 0.4
+    rawSellTrigger := ta.crossunder(kVal, dVal) and kVal > 40.0 and demValue < 0.6
+
+// Cooldown Management
 var int lastSignalBar = -100
 barsSinceLast = bar_index - lastSignalBar
 
-validBuy  = rawBuySignal and allFiltersPass_Buy and (barsSinceLast >= minBarsBetweenSignals)
-validSell = rawSellSignal and allFiltersPass_Sell and (barsSinceLast >= minBarsBetweenSignals)
+finalBuy  = rawBuyTrigger and trendAllowsBuy and allFilters_Buy and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
+finalSell = rawSellTrigger and trendAllowsSell and allFilters_Sell and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
 
-if validBuy or validSell
+if finalBuy or finalSell
     lastSignalBar := bar_index
 
 // =============================================================================
-// 7. PLOTTING & ALERTS
+// 10. PLOTTING & VISUALIZATION
 // =============================================================================
 // Supertrend Line
-plot(isUptrend ? stValue : na, "Supertrend Uptrend", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
-plot(isDowntrend ? stValue : na, "Supertrend Downtrend", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(plotSupertrendLine and stIsBull ? raw_stVal : na, "Supertrend Bullish", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(plotSupertrendLine and stIsBear ? raw_stVal : na, "Supertrend Bearish", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
 
-// Donchian Breakout Reference Levels (Optional visualization)
-plot(useDonchian ? donchianHigh : na, "Donchian High (Resistance)", color=color.new(color.teal, 60), style=plot.style_stepline)
-plot(useDonchian ? donchianLow : na, "Donchian Low (Support)", color=color.new(color.maroon, 60), style=plot.style_stepline)
+// EMA Baseline Line
+plot(plotEmaBaseline and useEmaTrend ? raw_emaBaseline : na, "200 EMA Baseline", color=color.new(color.yellow, 30), linewidth=2)
 
-// Buy / Sell Signals
-plotshape(validBuy, title="BUY Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="BUY", textcolor=color.white)
-plotshape(validSell, title="SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SELL", textcolor=color.white)
+// Donchian Levels
+plot(plotDonchianLevels and useDonchian ? donchianHigh : na, "Donchian High", color=color.new(color.teal, 60), style=plot.style_stepline)
+plot(plotDonchianLevels and useDonchian ? donchianLow : na, "Donchian Low", color=color.new(color.maroon, 60), style=plot.style_stepline)
+
+// Signal Markers
+plotshape(finalBuy, title="BUY Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="BUY", textcolor=color.white)
+plotshape(finalSell, title="SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SELL", textcolor=color.white)
 
 // Alert Conditions
-alertcondition(validBuy, title="Buy Signal Alert", message="[BUY] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
-alertcondition(validSell, title="Sell Signal Alert", message="[SELL] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
+alertcondition(finalBuy, title="Zerith Buy Signal", message="[ZERITH BUY] {{ticker}} Signal Triggered at {{close}} | TF: {{interval}}")
+alertcondition(finalSell, title="Zerith Sell Signal", message="[ZERITH SELL] {{ticker}} Signal Triggered at {{close}} | TF: {{interval}}")
 
 // =============================================================================
-// 8. REAL-TIME FILTER DASHBOARD
+// 11. REAL-TIME FILTER DASHBOARD
 // =============================================================================
-var table infoTable = table.new(position.top_right, 3, 9, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+table_pos = dashboardPosition == "Top Right" ? position.top_right :
+            dashboardPosition == "Bottom Right" ? position.bottom_right :
+            dashboardPosition == "Top Left" ? position.top_left : position.bottom_left
+
+var table infoTable = table.new(table_pos, 3, 10, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.rgb(70, 70, 70))
 
 if barstate.islast and showDashboard
-    table.cell(infoTable, 0, 0, "Filter Name", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 0, "Zerith Pro Filter", bgcolor=color.navy, text_color=color.white, text_size=size.small)
     table.cell(infoTable, 1, 0, "Status", bgcolor=color.navy, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 0, "Current Value", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 0, "Value / Mode", bgcolor=color.navy, text_color=color.white, text_size=size.small)
 
-    // 1. Donchian Breakout
-    bool donchianPassCurr = (isUptrend and passDonchian_Buy) or (isDowntrend and passDonchian_Sell)
-    table.cell(infoTable, 0, 1, "Donchian Break", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 1, useDonchian ? (donchianPassCurr ? "PASS" : "BLOCKED") : "OFF", bgcolor=useDonchian ? (donchianPassCurr ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 1, isUptrend ? ("H: " + str.tostring(donchianHigh, "#.##")) : ("L: " + str.tostring(donchianLow, "#.##")), text_color=color.white, text_size=size.small)
+    // Row 1: Trend Filter
+    string trendStatus = not useTrendFilter ? "DISABLED" : (trendAllowsBuy ? "BULL (BUY)" : (trendAllowsSell ? "BEAR (SELL)" : "NEUTRAL"))
+    color trendColor  = not useTrendFilter ? color.gray : (trendAllowsBuy ? color.green : (trendAllowsSell ? color.red : color.orange))
+    table.cell(infoTable, 0, 1, "Master Trend", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, trendStatus, bgcolor=trendColor, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 1, useTrendFilter ? trendMode : "Off", text_color=color.white, text_size=size.small)
 
-    // 2. Volume RVOL
-    table.cell(infoTable, 0, 2, "Volume (RVOL)", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 2, useVolume ? (passVolume ? "PASS" : "LOW VOL") : "OFF", bgcolor=useVolume ? (passVolume ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 2, hasVolume ? (str.tostring(volume, "#") + " / " + str.tostring(volThreshold, "#")) : "No Vol Data", text_color=color.white, text_size=size.small)
+    // Row 2: DeMarker
+    string demStatus = demValue <= demOversold ? "OVERSOLD" : (demValue >= demOverbought ? "OVERBOUGHT" : "MID")
+    color demColor   = demValue <= demOversold ? color.green : (demValue >= demOverbought ? color.red : color.gray)
+    table.cell(infoTable, 0, 2, "DeMarker (" + (demTimeframe == "" ? "Chart" : demTimeframe) + ")", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, useDeMarker ? demStatus : "OFF", bgcolor=useDeMarker ? demColor : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 2, str.tostring(demValue, "#.###"), text_color=color.white, text_size=size.small)
 
-    // 3. Kaufman ER
-    table.cell(infoTable, 0, 3, "Kaufman ER", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 3, useER ? (passER ? "PASS" : "BLOCKED") : "OFF", bgcolor=useER ? (passER ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 3, str.tostring(effRatio, "#.##") + " / " + str.tostring(minER, "#.##"), text_color=color.white, text_size=size.small)
+    // Row 3: Stoch RSI
+    string stochStatus = kVal <= stochOversold ? "OVERSOLD" : (kVal >= stochOverbought ? "OVERBOUGHT" : "NEUTRAL")
+    color stochColor   = kVal <= stochOversold ? color.green : (kVal >= stochOverbought ? color.red : color.gray)
+    table.cell(infoTable, 0, 3, "Stoch RSI (" + (stochTimeframe == "" ? "Chart" : stochTimeframe) + ")", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, useStochRsi ? stochStatus : "OFF", bgcolor=useStochRsi ? stochColor : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 3, "K:" + str.tostring(kVal, "#.#") + " D:" + str.tostring(dVal, "#.#"), text_color=color.white, text_size=size.small)
 
-    // 4. Choppiness Index
-    table.cell(infoTable, 0, 4, "Chop Index", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 4, useChop ? (passChop ? "PASS" : "BLOCKED") : "OFF", bgcolor=useChop ? (passChop ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 4, str.tostring(chopVal, "#.#") + " / " + str.tostring(maxChop, "#.#"), text_color=color.white, text_size=size.small)
+    // Row 4: Donchian Breakout
+    bool donchianPassCurr = (stIsBull and passDonchian_Buy) or (stIsBear and passDonchian_Sell)
+    table.cell(infoTable, 0, 4, "Donchian Break", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, useDonchian ? (donchianPassCurr ? "PASS" : "BLOCKED") : "OFF", bgcolor=useDonchian ? (donchianPassCurr ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 4, "H: " + str.tostring(donchianHigh, "#.##") + " / L: " + str.tostring(donchianLow, "#.##"), text_color=color.white, text_size=size.small)
 
-    // 5. BB Width
-    table.cell(infoTable, 0, 5, "BB Width", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 5, useBBW ? (passBBW ? "PASS" : "BLOCKED") : "OFF", bgcolor=useBBW ? (passBBW ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 5, str.tostring(bbWidth, "#.##") + " (Avg " + str.tostring(bbWidthAvg, "#.##") + ")", text_color=color.white, text_size=size.small)
+    // Row 5: Volume RVOL
+    table.cell(infoTable, 0, 5, "Volume (RVOL)", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, useVolume ? (passVolume ? "PASS" : "LOW VOL") : "OFF", bgcolor=useVolume ? (passVolume ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 5, hasVolume ? (str.tostring(volume, "#") + " / " + str.tostring(volThreshold, "#")) : "No Vol Data", text_color=color.white, text_size=size.small)
 
-    // 6. EMA Spread %
-    table.cell(infoTable, 0, 6, "EMA Spread %", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 6, useEMASpread ? (passEMA ? "PASS" : "BLOCKED") : "OFF", bgcolor=useEMASpread ? (passEMA ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 6, str.tostring(emaSpread, "#.##") + "% / " + str.tostring(minSpreadPct, "#.##") + "%", text_color=color.white, text_size=size.small)
+    // Row 6: Kaufman ER
+    table.cell(infoTable, 0, 6, "Kaufman ER", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 6, useER ? (passER ? "PASS" : "BLOCKED") : "OFF", bgcolor=useER ? (passER ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 6, str.tostring(effRatio, "#.##") + " / " + str.tostring(minER, "#.##"), text_color=color.white, text_size=size.small)
 
-    // 7. MTF Supertrend
-    table.cell(infoTable, 0, 7, "HTF Supertrend", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 7, useMTF_ST ? (htfIsUp ? "BULL" : "BEAR") : "OFF", bgcolor=useMTF_ST ? (htfIsUp ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 7, "TF: " + htfTimeframe, text_color=color.white, text_size=size.small)
+    // Row 7: Choppiness Index
+    table.cell(infoTable, 0, 7, "Chop Index", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7, useChop ? (passChop ? "PASS" : "BLOCKED") : "OFF", bgcolor=useChop ? (passChop ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 7, str.tostring(chopVal, "#.#") + " / " + str.tostring(maxChop, "#.#"), text_color=color.white, text_size=size.small)
 
-    // 8. Signal Cooldown
-    table.cell(infoTable, 0, 8, "Signal Cooldown", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 8, barsSinceLast >= minBarsBetweenSignals ? "READY" : "WAIT", bgcolor=barsSinceLast >= minBarsBetweenSignals ? color.teal : color.orange, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 8, str.tostring(barsSinceLast) + " / " + str.tostring(minBarsBetweenSignals) + " bars", text_color=color.white, text_size=size.small)
+    // Row 8: BB Width
+    table.cell(infoTable, 0, 8, "BB Width", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 8, useBBW ? (passBBW ? "PASS" : "BLOCKED") : "OFF", bgcolor=useBBW ? (passBBW ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 8, str.tostring(bbWidth, "#.##") + " (Avg " + str.tostring(bbWidthAvg, "#.##") + ")", text_color=color.white, text_size=size.small)
+
+    // Row 9: Signal Cooldown
+    table.cell(infoTable, 0, 9, "Cooldown", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 9, barsSinceLast >= minBarsCooldown ? "READY" : "WAIT", bgcolor=barsSinceLast >= minBarsCooldown ? color.teal : color.orange, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 9, str.tostring(barsSinceLast) + " / " + str.tostring(minBarsCooldown) + " bars", text_color=color.white, text_size=size.small)
