@@ -29,11 +29,15 @@ smoothD             = input.int(3, "Smooth D", group=grp_signal)
 stochOversold       = input.float(25.0, "Stoch RSI Oversold Zone", group=grp_signal)
 stochOverbought     = input.float(75.0, "Stoch RSI Overbought Zone", group=grp_signal)
 
-// 2.3 Signal Spacing Cooldown
-minBarsCooldown     = input.int(10, "Min Distance Between Signals (Bars, 0=ปิด)", minval=0, group="3. Basic Settings")
+// =============================================================================
+// 3. SIGNAL EXECUTION & ANTI-REPAINT CONFIRMATION
+// =============================================================================
+grp_exec = "3. Signal Execution & Anti-Repaint"
+requireCandleClose  = input.bool(true, "Wait for Candle Close to Confirm (รอจบแท่งเทียน คอนเฟิร์มไม่ Repaint)", group=grp_exec)
+minBarsCooldown     = input.int(10, "Min Distance Between Signals (Bars, 0=ปิด)", minval=0, group=grp_exec)
 
 // =============================================================================
-// 3. STRUCTURAL & ANTI-SIDEWAY FILTERS
+// 4. STRUCTURAL & ANTI-SIDEWAY FILTERS
 // =============================================================================
 grp_struct = "4. Structural & Volume Filters (Anti-Sideway)"
 useDonchian         = input.bool(true, "Enable Donchian / Swing Breakout Confirmation", group=grp_struct)
@@ -45,7 +49,7 @@ volumeMaLen         = input.int(20, "Volume MA Length", minval=1, group=grp_stru
 volumeMult          = input.float(1.2, "Min Volume Multiplier (x MA)", step=0.1, group=grp_struct)
 
 // =============================================================================
-// 4. OPTIONAL MATHEMATICAL SIDEWAY FILTERS
+// 5. OPTIONAL MATHEMATICAL SIDEWAY FILTERS
 // =============================================================================
 grp_opt = "5. Optional Math Filters"
 useER               = input.bool(false, "Enable Kaufman's Efficiency Ratio (KER)", group=grp_opt)
@@ -66,16 +70,16 @@ emaFastLen          = input.int(20, "EMA Fast Length", group=grp_opt)
 emaSlowLen          = input.int(50, "EMA Slow Length", group=grp_opt)
 minSpreadPct        = input.float(0.15, "Min EMA Spread %", step=0.05, group=grp_opt)
 
-// 4.1 Dashboard
+// 5.1 Dashboard
 showDashboard       = input.bool(true, "Show Filter Status Dashboard", group="6. Dashboard")
 
 // =============================================================================
-// 5. SUPERTREND CALCULATION (NATIVE / MTF WRAPPER)
+// 6. SUPERTREND CALCULATION (NATIVE / MTF WRAPPER)
 // =============================================================================
-// 5.1 Local Base Calculation
+// 6.1 Local Base Calculation
 [loc_stVal, loc_stDir] = ta.supertrend(atrMultiplier, atrPeriod)
 
-// 5.2 MTF Supertrend Security (Evaluated cleanly if Timeframe is customized)
+// 6.2 MTF Supertrend Security (Evaluated cleanly if Timeframe is customized)
 calc_st(float mult, int len) =>
     ta.supertrend(mult, len)
 
@@ -91,7 +95,7 @@ trendAllowsBuy  = not useSupertrend or isUptrend
 trendAllowsSell = not useSupertrend or isDowntrend
 
 // =============================================================================
-// 6. SIGNAL ENGINE (DEMARKER + STOCHASTIC RSI MTF WRAPPER)
+// 7. SIGNAL ENGINE (DEMARKER + STOCHASTIC RSI MTF WRAPPER)
 // =============================================================================
 calcEngine(int dLen, int rLen, int sLen, int sK, int sD, float dOS, float dOB, float sOS, float sOB) =>
     // DeMarker
@@ -137,28 +141,28 @@ k             = isCustomSignalTF ? secK   : locK
 d             = isCustomSignalTF ? secD   : locD
 
 // =============================================================================
-// 7. ANTI-SIDEWAY & STRUCTURAL FILTER CALCULATIONS
+// 8. ANTI-SIDEWAY & STRUCTURAL FILTER CALCULATIONS
 // =============================================================================
-// 7.1 Donchian / Swing High-Low Breakout
+// 8.1 Donchian / Swing High-Low Breakout
 donchianHigh = ta.highest(high[1], donchianPeriod)
 donchianLow  = ta.lowest(low[1], donchianPeriod)
 
 passDonchian_Buy  = not useDonchian or (breakoutByClose ? (close >= donchianHigh) : (high >= donchianHigh))
 passDonchian_Sell = not useDonchian or (breakoutByClose ? (close <= donchianLow)  : (low <= donchianLow))
 
-// 7.2 Volume Expansion / RVOL
+// 8.2 Volume Expansion / RVOL
 hasVolume    = not na(volume) and volume > 0
 volMa        = ta.sma(volume, volumeMaLen)
 volThreshold = volMa * volumeMult
 passVolume   = not useVolume or not hasVolume or (volume >= volThreshold)
 
-// 7.3 Kaufman's Efficiency Ratio
+// 8.3 Kaufman's Efficiency Ratio
 changeNet = math.abs(close - close[erPeriod])
 sumDiffs  = math.sum(math.abs(close - close[1]), erPeriod)
 effRatio  = sumDiffs != 0.0 ? (changeNet / sumDiffs) : 0.0
 passER    = not useER or (effRatio >= minER)
 
-// 7.4 Choppiness Index
+// 8.4 Choppiness Index
 hhChop    = ta.highest(high, chopLen)
 llChop    = ta.lowest(low, chopLen)
 rangeChop = hhChop - llChop
@@ -166,13 +170,13 @@ sumAtr1   = math.sum(ta.atr(1), chopLen)
 chopVal   = (rangeChop > 0.0 and sumAtr1 > 0.0) ? 100.0 * (math.log10(sumAtr1 / rangeChop) / math.log10(chopLen)) : 50.0
 passChop  = not useChop or (chopVal <= maxChop)
 
-// 7.5 Bollinger Bands Width
+// 8.5 Bollinger Bands Width
 [bbBasis, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
 bbWidth   = bbBasis != 0.0 ? ((bbUpper - bbLower) / bbBasis) * 100.0 : 0.0
 bbWidthAvg= ta.sma(bbWidth, bbSmaLen)
 passBBW   = not useBBW or (bbWidth >= bbWidthAvg)
 
-// 7.6 EMA Spread
+// 8.6 EMA Spread
 emaFast   = ta.ema(close, emaFastLen)
 emaSlow   = ta.ema(close, emaSlowLen)
 emaSpread = close != 0.0 ? (math.abs(emaFast - emaSlow) / close) * 100.0 : 0.0
@@ -183,40 +187,47 @@ allFiltersPass_Buy  = passDonchian_Buy and passVolume and passER and passChop an
 allFiltersPass_Sell = passDonchian_Sell and passVolume and passER and passChop and passBBW and passEMA
 
 // =============================================================================
-// 8. FINAL SIGNAL EXECUTION & COOLDOWN
+// 9. FINAL SIGNAL EXECUTION & COOLDOWN (ANTI-REPAINT CONFIRMED)
 // =============================================================================
+// Anti-Repaint Guard:
+// If requireCandleClose is enabled, only execute and lock signals on confirmed closed bars
+bool isBarConfirmed = not requireCandleClose or not barstate.isrealtime or barstate.isconfirmed
+
+rawBuyCondition  = rawBuySignal and trendAllowsBuy and allFiltersPass_Buy
+rawSellCondition = rawSellSignal and trendAllowsSell and allFiltersPass_Sell
+
 var int lastSignalBar = -100
 barsSinceLast = bar_index - lastSignalBar
 
-validBuy  = rawBuySignal and trendAllowsBuy and allFiltersPass_Buy and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
-validSell = rawSellSignal and trendAllowsSell and allFiltersPass_Sell and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
+validBuy  = rawBuyCondition and isBarConfirmed and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
+validSell = rawSellCondition and isBarConfirmed and (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown)
 
 if validBuy or validSell
     lastSignalBar := bar_index
 
 // =============================================================================
-// 9. PLOTTING & ALERTS
+// 10. PLOTTING & ALERTS
 // =============================================================================
-// 9.1 Supertrend Line
+// 10.1 Supertrend Line
 plot(useSupertrend and isUptrend ? stVal : na, "Supertrend Uptrend", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
 plot(useSupertrend and isDowntrend ? stVal : na, "Supertrend Downtrend", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
 
-// 9.2 Donchian Breakout Reference Levels
+// 10.2 Donchian Breakout Reference Levels
 plot(useDonchian ? donchianHigh : na, "Donchian High (Resistance)", color=color.new(color.teal, 60), style=plot.style_stepline)
 plot(useDonchian ? donchianLow : na, "Donchian Low (Support)", color=color.new(color.maroon, 60), style=plot.style_stepline)
 
-// 9.3 Buy / Sell Signals
+// 10.3 Buy / Sell Signals
 plotshape(validBuy, title="BUY Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="BUY", textcolor=color.white)
 plotshape(validSell, title="SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SELL", textcolor=color.white)
 
-// 9.4 Alert Conditions
-alertcondition(validBuy, title="Buy Signal Alert", message="[BUY] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
-alertcondition(validSell, title="Sell Signal Alert", message="[SELL] Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
+// 10.4 Alert Conditions (Confirmed on Bar Close)
+alertcondition(validBuy, title="Buy Signal Alert (Confirmed)", message="[BUY] Confirmed Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
+alertcondition(validSell, title="Sell Signal Alert (Confirmed)", message="[SELL] Confirmed Supertrend + DeM + StochRSI trigger on {{ticker}} at {{close}}")
 
 // =============================================================================
-// 10. REAL-TIME FILTER DASHBOARD
+// 11. REAL-TIME FILTER DASHBOARD
 // =============================================================================
-var table infoTable = table.new(position.top_right, 3, 9, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+var table infoTable = table.new(position.top_right, 3, 10, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
 
 if barstate.islast and showDashboard
     table.cell(infoTable, 0, 0, "Filter Name", bgcolor=color.navy, text_color=color.white, text_size=size.small)
@@ -233,33 +244,38 @@ if barstate.islast and showDashboard
     table.cell(infoTable, 1, 2, signalTimeframe == "" ? "Chart TF" : signalTimeframe, bgcolor=color.teal, text_color=color.white, text_size=size.small)
     table.cell(infoTable, 2, 2, "DeM + StochRSI", text_color=color.white, text_size=size.small)
 
-    // 3. Donchian Breakout
+    // 3. Confirmation Mode
+    table.cell(infoTable, 0, 3, "Anti-Repaint Guard", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, requireCandleClose ? "CANDLE CLOSE" : "INTRABAR", bgcolor=requireCandleClose ? color.green : color.orange, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 3, requireCandleClose ? "Confirmed (No Repaint)" : "Realtime Ticks", text_color=color.white, text_size=size.small)
+
+    // 4. Donchian Breakout
     bool donchianPassCurr = (isUptrend and passDonchian_Buy) or (isDowntrend and passDonchian_Sell)
-    table.cell(infoTable, 0, 3, "Donchian Break", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 3, useDonchian ? (donchianPassCurr ? "PASS" : "BLOCKED") : "OFF", bgcolor=useDonchian ? (donchianPassCurr ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 3, isUptrend ? ("H: " + str.tostring(donchianHigh, "#.##")) : ("L: " + str.tostring(donchianLow, "#.##")), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 4, "Donchian Break", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, useDonchian ? (donchianPassCurr ? "PASS" : "BLOCKED") : "OFF", bgcolor=useDonchian ? (donchianPassCurr ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 4, isUptrend ? ("H: " + str.tostring(donchianHigh, "#.##")) : ("L: " + str.tostring(donchianLow, "#.##")), text_color=color.white, text_size=size.small)
 
-    // 4. Volume RVOL
-    table.cell(infoTable, 0, 4, "Volume (RVOL)", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 4, useVolume ? (passVolume ? "PASS" : "LOW VOL") : "OFF", bgcolor=useVolume ? (passVolume ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 4, hasVolume ? (str.tostring(volume, "#") + " / " + str.tostring(volThreshold, "#")) : "No Vol Data", text_color=color.white, text_size=size.small)
+    // 5. Volume RVOL
+    table.cell(infoTable, 0, 5, "Volume (RVOL)", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, useVolume ? (passVolume ? "PASS" : "LOW VOL") : "OFF", bgcolor=useVolume ? (passVolume ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 5, hasVolume ? (str.tostring(volume, "#") + " / " + str.tostring(volThreshold, "#")) : "No Vol Data", text_color=color.white, text_size=size.small)
 
-    // 5. Kaufman ER
-    table.cell(infoTable, 0, 5, "Kaufman ER", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 5, useER ? (passER ? "PASS" : "BLOCKED") : "OFF", bgcolor=useER ? (passER ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 5, str.tostring(effRatio, "#.##") + " / " + str.tostring(minER, "#.##"), text_color=color.white, text_size=size.small)
+    // 6. Kaufman ER
+    table.cell(infoTable, 0, 6, "Kaufman ER", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 6, useER ? (passER ? "PASS" : "BLOCKED") : "OFF", bgcolor=useER ? (passER ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 6, str.tostring(effRatio, "#.##") + " / " + str.tostring(minER, "#.##"), text_color=color.white, text_size=size.small)
 
-    // 6. Choppiness Index
-    table.cell(infoTable, 0, 6, "Chop Index", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 6, useChop ? (passChop ? "PASS" : "BLOCKED") : "OFF", bgcolor=useChop ? (passChop ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 6, str.tostring(chopVal, "#.#") + " / " + str.tostring(maxChop, "#.#"), text_color=color.white, text_size=size.small)
+    // 7. Choppiness Index
+    table.cell(infoTable, 0, 7, "Chop Index", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7, useChop ? (passChop ? "PASS" : "BLOCKED") : "OFF", bgcolor=useChop ? (passChop ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 7, str.tostring(chopVal, "#.#") + " / " + str.tostring(maxChop, "#.#"), text_color=color.white, text_size=size.small)
 
-    // 7. BB Width
-    table.cell(infoTable, 0, 7, "BB Width", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 7, useBBW ? (passBBW ? "PASS" : "BLOCKED") : "OFF", bgcolor=useBBW ? (passBBW ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 7, str.tostring(bbWidth, "#.##") + " (Avg " + str.tostring(bbWidthAvg, "#.##") + ")", text_color=color.white, text_size=size.small)
+    // 8. BB Width
+    table.cell(infoTable, 0, 8, "BB Width", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 8, useBBW ? (passBBW ? "PASS" : "BLOCKED") : "OFF", bgcolor=useBBW ? (passBBW ? color.green : color.red) : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 8, str.tostring(bbWidth, "#.##") + " (Avg " + str.tostring(bbWidthAvg, "#.##") + ")", text_color=color.white, text_size=size.small)
 
-    // 8. Signal Cooldown
-    table.cell(infoTable, 0, 8, "Signal Cooldown", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 8, (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown) ? "READY" : "WAIT", bgcolor=(minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown) ? color.teal : color.orange, text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 2, 8, str.tostring(barsSinceLast) + " / " + str.tostring(minBarsCooldown) + " bars", text_color=color.white, text_size=size.small)
+    // 9. Signal Cooldown
+    table.cell(infoTable, 0, 9, "Signal Cooldown", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 9, (minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown) ? "READY" : "WAIT", bgcolor=(minBarsCooldown <= 0 or barsSinceLast >= minBarsCooldown) ? color.teal : color.orange, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 2, 9, str.tostring(barsSinceLast) + " / " + str.tostring(minBarsCooldown) + " bars", text_color=color.white, text_size=size.small)
