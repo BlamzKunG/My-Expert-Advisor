@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|                                       Quantum_Emperor_EA.mq5     |
-//|                 Quantum Emperor EA MT5 Port (Native MQL5)        |
+//|                             Zerith_London_Breakout_Recovery_EA.mq5 |
+//|        Zerith Series - Asian / London Box Range Breakout (ORB)   |
 //|                             https://www.mql5.com                 |
 //+------------------------------------------------------------------+
-#property copyright "Bogdan Puscasu (from MQL5.com) / MT5 Port 2026"
+#property copyright "Zerith Series / Bogdan Puscasu Architecture"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
 #property version   "1.70"
-#property description "Quantum Emperor MT5 - High Probability Asian/London Session Box Range Breakout (ORB)"
-#property description "Features Smart Recovery System, OCO Order Cancellation, Expiry Management & NFP Filters"
+#property description "Zerith London Breakout Recovery MT5 - Asian/London Session Box Range Breakout (ORB)"
+#property description "Pure Price Action Breakout with OCO Order Cancellation, Expiry Management & Smart Recovery"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -35,7 +35,7 @@ enum ENUM_ON_OFF
 
 //--- Input Parameters
 input group ">>>> 1. General & Range Box Settings"
-input string            InpEAComment          = "Quantum Emperor MT5"; // Trade Comment
+input string            InpEAComment          = "Zerith_London_ORB";   // Trade Comment
 input string            InpBoxStart           = "03:00";              // Box Hour Start (HH:MM)
 input string            InpBoxEnd             = "11:00";              // Box Hour End (HH:MM)
 input double            InpAbovePoints        = 10.0;                 // Points Above Range for Buy Stop
@@ -385,7 +385,7 @@ void DrawDashboard()
    ENUM_ORDER_TYPE ord_type; ulong t;
    int pending_orders = CountPendingOrders(ord_type, t);
 
-   string text = StringFormat("--- QUANTUM EMPEROR EA (MT5 PORT) ---\n"
+   string text = StringFormat("--- ZERITH LONDON BREAKOUT RECOVERY EA ---\n"
                               "Trading Allowed: %s\n"
                               "Session Box: %s - %s (High: %.2f | Low: %.2f)\n"
                               "Risk Level: %s | Next Order Lot: %.2f\n"
@@ -425,7 +425,7 @@ int OnInit()
    g_buy_pending_placed  = false;
    g_sell_pending_placed = false;
 
-   Print("Quantum Emperor EA MT5 Port successfully initialized.");
+   Print("Zerith London Breakout Recovery EA MT5 successfully initialized.");
    return INIT_SUCCEEDED;
   }
 
