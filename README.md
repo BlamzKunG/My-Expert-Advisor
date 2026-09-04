@@ -20,6 +20,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_Gold_Trade_Pro_EA.mq5
 │   ├── Zerith_London_Breakout_Recovery_EA.mq5
 │   ├── Zerith_MACD_Martingale_Grid_EA.mq5
+│   ├── Zerith_News_Straddle_ReverseTrailing_EA.mq5
 │   └── Zerith_Supertrend_MultiStrategy_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
 │   ├── Zerith_Supertrend_DeMarker_Signal.pine
@@ -31,10 +32,13 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   │   ├── Conservative_XAUUSD.set
 │   │   ├── Balanced_XAUUSD.set
 │   │   └── Aggressive_XAUUSD.set
-│   └── MeanReversion_Grid/
-│       ├── SmallAccount_500USD.set
-│       ├── Standard_2000USD.set
-│       └── Pro_5000USD.set
+│   ├── MeanReversion_Grid/
+│   │   ├── SmallAccount_500USD.set
+│   │   ├── Standard_2000USD.set
+│   │   └── Pro_5000USD.set
+│   └── News_Straddle/
+│       ├── XAUUSD_Gold_News_Straddle.set
+│       └── Forex_Major_News_Straddle.set
 ├── LICENSE                       # MIT License
 └── README.md                     # Repository documentation
 ```
@@ -46,6 +50,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors (Zerith Series)
 | File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
+| [`Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5`](Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5) | High-Impact News Straddle / Gold & FX | News Straddle Breakout EA with Opposite Stop Order Trailing SL, Automated Reversal Flip, and Capital Protection |
 | [`Experts/Zerith_Gold_Trade_Pro_EA.mq5`](Experts/Zerith_Gold_Trade_Pro_EA.mq5) | Daily Support/Resistance Breakout / XAUUSD | 7 Daily Breakout Modules with Multi-Stage Trailing Stop & Drawdown Protection |
 | [`Experts/Zerith_Supertrend_MultiStrategy_EA.mq5`](Experts/Zerith_Supertrend_MultiStrategy_EA.mq5) | Supertrend + 12 MTF DeMarker Matrix / XAUUSD & FX | Multi-Strategy Portfolio Engine with Smart Recovery Grid & Dynamic ATR Spacing |
 | [`Experts/Zerith_London_Breakout_Recovery_EA.mq5`](Experts/Zerith_London_Breakout_Recovery_EA.mq5) | London Session Range Breakout (ORB) / GBPUSD & FX | Asian/London Box Breakout with OCO Cancellation & Smart Recovery System |
@@ -65,6 +70,33 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 | File | Description |
 | :--- | :--- |
 | [`Scripts/ExportMultiData_M5.mq5`](Scripts/ExportMultiData_M5.mq5) | Multi-Currency M5 Historical Data Exporter |
+
+---
+
+## ⚡ Zerith News Straddle Reverse-Trailing EA (Opposite Stop Order Trailing SL)
+
+Designed specifically for high-volatility news events (US Non-Farm Payrolls, CPI Inflation, FOMC Rate Decisions, PPI, GDP).
+
+### Core Strategy Mechanics:
+1. **News Straddle Entry**:
+   - Places a **Buy Stop** above Ask and a **Sell Stop** below Bid at a configurable distance (`InpStraddleDistancePoints`).
+   - Triggered either manually via on-chart button (`[🚀 PLACE NOW]`), immediately upon launch, or scheduled before news time countdown.
+2. **Opposite Stop Order Trailing SL**:
+   - When a breakout occurs and **Buy Stop** triggers at e.g. 4000:
+     - The pending **Sell Stop** (at 3998) is retained on the book and acts as both the **Stop Loss** and the **Reversal Entry**.
+     - As price advances into profit (e.g. price reaches 4001), the Sell Stop is dynamically trailed up to 4000 (locking in breakeven/profit).
+     - As price continues advancing (4002, 4003...), the Sell Stop continually trails upward behind the market.
+3. **Automated Reversal & Direction Flip**:
+   - If market whip-saws and hits the trailed Sell Stop:
+     - The Sell Stop executes into an active **SELL position**.
+     - The EA immediately **closes the previous BUY position**.
+     - A brand-new **BUY STOP** is placed above the current price at the specified distance.
+     - The new Buy Stop now becomes the dynamic trailing SL and reversal trigger for the Sell trade.
+   - Supports configurable lot multipliers (`InpReverseMultiplier`) and maximum reversal cycles (`InpMaxReversals`).
+4. **Safety & Capital Protection**:
+   - Spread filter prevents order placement if broker spread widens excessively right before news releases.
+   - Max Daily Loss % and Floating Drawdown % equity guards.
+   - On-chart interactive HUD dashboard with one-click **[PLACE NOW]**, **[CANCEL PENDING]**, and **[CLOSE ALL & RESET]** buttons.
 
 ---
 

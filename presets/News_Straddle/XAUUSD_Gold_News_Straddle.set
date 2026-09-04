@@ -1,0 +1,42 @@
+;============================================================
+; Zerith News Straddle Reverse-Trailing EA - Preset: Gold (XAUUSD)
+; Optimized for High-Impact News: NFP, CPI, FOMC, PPI, Retail Sales
+; Strategy: Straddle Breakout with Opposite Stop Trailing SL & Reversal
+;============================================================
+InpTriggerMode=0
+InpNewsTime=15:30:00
+InpSecondsBeforeNews=30
+InpStraddleDistancePoints=250.0
+InpPendingExpiryMinutes=30
+
+;--- Opposite Order Trailing
+InpTrailingStartPoints=100.0
+InpTrailingDistancePoints=120.0
+InpTrailingStepPoints=10.0
+
+;--- Reversal & Recovery
+InpMaxReversals=5
+InpReverseMultiplier=1.0
+InpReverseDistancePoints=0.0
+InpOnMaxReversals=0
+
+;--- Money Management
+InpLotMode=0
+InpFixedLot=0.01
+InpRiskPercent=1.0
+InpTakeProfitPoints=0.0
+InpTargetProfitMoney=0.0
+
+;--- Capital Protection & Filters
+InpMaxSpreadPoints=60.0
+InpEnableDDProtection=true
+InpMaxTotalDDPercent=10.0
+InpMaxDailyLossPercent=5.0
+InpMagicNumber=889901
+InpSlippage=20
+InpTradeComment=XAU_NewsStraddle
+
+;--- HUD
+InpShowPanel=true
+InpPanelX=20
+InpPanelY=30
