@@ -22,6 +22,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_MACD_Martingale_Grid_EA.mq5
 │   ├── Zerith_News_Straddle_ReverseTrailing_EA.mq5
 │   ├── Zerith_Oneshot.mq5
+│   ├── Zerith_SBR_Liquidity_Sweep_EA.mq5
 │   └── Zerith_Supertrend_MultiStrategy_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
 │   ├── Zerith_Supertrend_DeMarker_Signal.pine
@@ -37,9 +38,12 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   │   ├── SmallAccount_500USD.set
 │   │   ├── Standard_2000USD.set
 │   │   └── Pro_5000USD.set
-│   └── News_Straddle/
-│       ├── XAUUSD_Gold_News_Straddle.set
-│       └── Forex_Major_News_Straddle.set
+│   ├── News_Straddle/
+│   │   ├── XAUUSD_Gold_News_Straddle.set
+│   │   └── Forex_Major_News_Straddle.set
+│   └── SBR_Liquidity_Sweep/
+│       ├── XAUUSD_H4_M15_Gold.set
+│       └── EURUSD_H4_M15_Forex.set
 ├── LICENSE                       # MIT License
 └── README.md                     # Repository documentation
 ```
@@ -51,6 +55,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors (Zerith Series)
 | File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
+| [`Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5`](Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5) | Smart Money Concepts (SMC) / Gold & FX | Multi-Timeframe SBR/RBS Flip Zones with LTF Liquidity Sweep & Classic A/V Reversal Trigger |
 | [`Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5`](Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5) | High-Impact News Straddle / Gold & FX | News Straddle Breakout EA with Opposite Stop Order Trailing SL, Automated Reversal Flip, and Capital Protection |
 | [`Experts/Zerith_Gold_Trade_Pro_EA.mq5`](Experts/Zerith_Gold_Trade_Pro_EA.mq5) | Daily Support/Resistance Breakout / XAUUSD | 7 Daily Breakout Modules with Multi-Stage Trailing Stop & Drawdown Protection |
 | [`Experts/Zerith_Supertrend_MultiStrategy_EA.mq5`](Experts/Zerith_Supertrend_MultiStrategy_EA.mq5) | Supertrend + 12 MTF DeMarker Matrix / XAUUSD & FX | Multi-Strategy Portfolio Engine with Smart Recovery Grid & Dynamic ATR Spacing |
@@ -99,6 +104,49 @@ Designed specifically for high-volatility news events (US Non-Farm Payrolls, CPI
    - Spread filter prevents order placement if broker spread widens excessively right before news releases.
    - Max Daily Loss % and Floating Drawdown % equity guards.
    - On-chart interactive HUD dashboard with one-click **[PLACE NOW]**, **[CANCEL PENDING]**, and **[CLOSE ALL & RESET]** buttons.
+
+---
+
+## 🎯 Zerith SBR/RBS + Classic A/V + Liquidity Sweep EA (Smart Money Concepts)
+
+Designed to automate the institutional Smart Money Concepts (SMC) reversal methodology using a 3-layer confluence model.
+
+```mermaid
+flowchart TD
+    A[HTF Market Structure & BOS Detection\nPERIOD_H4] --> B[SBR / RBS Flip Zone Identified\nSupport <-> Resistance]
+    B --> C{1st Retest Discipline\nretest_count == 0?}
+    C -- No --> Z[Ignore / Wait Next Zone]
+    C -- Yes --> D[LTF Liquidity Sweep\nPERIOD_M15]
+    D --> E{Upper/Lower Wick >= 45%\nPrice closes back inside?}
+    E -- No --> Z
+    E -- Yes --> F[Classic A / V Reversal Pattern\nPinbar / Engulfing Candle]
+    F --> G[Open Order: Market Execution]
+    G --> H[SL: Past Sweep Wick + ATR Buffer\nTP: Fixed R:R 1:2.5 or 1:3.0]
+    H --> I[Breakeven Guard: Lock at 1:1 R:R]
+```
+
+### Core Strategy Mechanics:
+1. **Multi-Timeframe Structure & Flip Zones (HTF - H4/D1)**:
+   - Scans HTF pivot points using swing left/right validation.
+   - Detects Break of Structure (BOS):
+     - **Bearish BOS:** HTF bar closes below previous Swing Low $\rightarrow$ Flips into **SBR (Support Becomes Resistance)**.
+     - **Bullish BOS:** HTF bar closes above previous Swing High $\rightarrow$ Flips into **RBS (Resistance Becomes Support)**.
+   - Dynamic Zone Buffer calculated automatically via `ATR(HTF) * InpZoneAtrMult`.
+2. **Strict 1st Retest Discipline**:
+   - Only trades the **very first retest** of the freshly formed flip zone (`InpOnlyFirstRetest = true`).
+   - Prevents chasing degraded zones where institutional liquidity has already been exhausted.
+3. **LTF Liquidity Sweep / Stop Hunt Trigger (LTF - M15/M5)**:
+   - Verifies price sweeps beyond the SBR/RBS level to purge retail stop orders.
+   - **Wick Ratio Rule:** Candlestick wick must constitute $\ge 45\%$ of total candle range.
+   - **Rejection Close:** Candle must close back inside/below SBR (for Sell) or inside/above RBS (for Buy).
+4. **Classic A / Classic V Reversal Patterns**:
+   - **Classic A (Top Reversal):** Fast run-up into resistance, culminating in a sharp A-peak rejection (Shooting star pinbar or Bearish Engulfing).
+   - **Classic V (Bottom Reversal):** Fast sell-off into support, culminating in a sharp V-trough rebound (Hammer pinbar or Bullish Engulfing).
+5. **Trade Execution & Capital Protection**:
+   - **Stop Loss:** Anchored directly behind the liquidity sweep wick plus ATR buffer.
+   - **Take Profit:** Configured with positive mathematical expectancy ($1:2.5$ or $1:3.0$ R:R).
+   - **Breakeven Engine:** Automatically locks Stop Loss to entry $+ \text{buffer}$ once the position hits $1:1$ R:R.
+   - **Prop-Firm Guards:** Max Daily Loss % and Max Floating Drawdown % equity limits.
 
 ---
 

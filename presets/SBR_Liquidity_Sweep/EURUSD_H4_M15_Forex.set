@@ -1,0 +1,58 @@
+;============================================================
+; Zerith SBR/RBS + Classic A/V + Liquidity Sweep EA
+; Preset: Forex Majors (EURUSD / GBPUSD) - H4 Structure / M15 Entry
+; Smart Money Concepts (SMC) Reversal Strategy
+;============================================================
+InpHTF=16388
+InpLTF=15
+InpSwingLeftBars=4
+InpSwingRightBars=2
+InpMaxScanBarsHTF=150
+InpZoneAtrMult=0.20
+InpOnlyFirstRetest=true
+InpMaxZoneAgeBars=120
+
+;--- Liquidity Sweep Mechanics
+InpMinWickPercent=45.0
+InpMinSweepPoints=15
+InpUseVolumeFilter=false
+InpVolumeMultiplier=1.25
+
+;--- Classic A/V Pattern
+InpRequireClassicAV=true
+InpRequireEngulfOrPin=true
+InpAVMomentumBars=3
+
+;--- Money Management
+InpLotMode=0
+InpRiskPercent=1.0
+InpFixedLot=0.01
+InpLotPerBalanceStep=1000.0
+InpMaxLotSize=10.0
+InpMaxOpenPositions=1
+InpMaxSpreadPoints=25
+InpSlippage=10
+
+;--- Stop Loss & Take Profit
+InpSLBufferATRMult=0.20
+InpRiskRewardRatio=3.0
+InpMoveToBreakeven=true
+InpBEBufferPoints=15
+InpUseTrailingStop=false
+InpTrailStartRR=1.5
+InpTrailStepPoints=40
+
+;--- Capital Protection
+InpEnableDDProtection=true
+InpMaxDailyLossPercent=4.0
+InpMaxTotalDDPercent=10.0
+InpCloseAllOnBreach=true
+
+;--- Filters & System
+InpTradeFriday=true
+InpFridayCloseEarly=true
+InpFridayStopHour=19
+InpMagicNumber=998812
+InpTradeComment=Zerith_SMC_FX
+InpDrawChartObjects=true
+InpShowDashboard=true
