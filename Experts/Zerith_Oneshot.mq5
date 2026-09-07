@@ -131,7 +131,6 @@ input int                    InpMaxBasketOrders      = 5;                       
 input double                 InpGridBaseDistance     = 200.0;                      // Base Grid Step Distance (Points)
 input double                 InpGridStepMultiplier   = 1.5;                        // Grid Step Distance Multiplier (for Expanding Mode)
 input double                 InpGridLotMultiplier    = 1.2;                        // Recovery Lot Multiplier (1.0 = Fixed Lot, >1.0 = Scaling)
-input int                    InpBasketTakeProfit     = 150;                        // Basket Take Profit (Points above Avg Price for 2+ Orders)
 input bool                   InpCutLossOnMaxStep     = true;                       // Hard Cut-Loss on (MaxOrders + 1) Step Distance
 
 //--- Presets & Individual Strategies
@@ -820,31 +819,9 @@ void ManageStrategy(const int slot)
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
    // =============================================================
-   // 1. Take Profit Management (Basket TP vs Single Order)
+   // 1. Original Profit Management (Break-Even & Trailing Stop)
    // =============================================================
-   // Basket Take Profit for 2 or more open positions
-   if(count >= 2 && InpBasketTakeProfit > 0)
-     {
-      double basket_tp = (pos_type == POSITION_TYPE_BUY) ?
-                         NormalizePrice(avg_price + InpBasketTakeProfit * point) :
-                         NormalizePrice(avg_price - InpBasketTakeProfit * point);
-
-      bool basket_tp_hit = (pos_type == POSITION_TYPE_BUY && bid >= basket_tp) ||
-                           (pos_type == POSITION_TYPE_SELL && ask <= basket_tp);
-
-      if(basket_tp_hit)
-        {
-         PrintFormat("🎯 [Basket TP Hit] Strategy %d closed %d positions at target %.2f (Avg: %.2f)",
-                     slot + 1, count, basket_tp, avg_price);
-         CloseStrategy(slot, "Basket Take Profit");
-         return;
-        }
-     }
-   else if(count == 1)
-     {
-      // Single Initial One-Shot order management (Break-Even & Trailing Stop)
-      ApplyBreakEvenAndTrailing(slot);
-     }
+   ApplyBreakEvenAndTrailing(slot);
 
    // =============================================================
    // 2. Grid Recovery Engine (Original 100% vs Expanding Multiplier)
