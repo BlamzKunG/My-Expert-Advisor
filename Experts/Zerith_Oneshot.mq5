@@ -88,6 +88,12 @@ enum ENUM_HOUR_OF_DAY
    HOUR_23 = 23  // 23:00
   };
 
+enum ENUM_GRID_SPACING_MODE
+  {
+   GRID_SPACING_ORIGINAL_FIXED = 0, // 100% Original (Fixed Step Distance)
+   GRID_SPACING_EXPANDING_MULT = 1  // Expanding Step (* Distance Multiplier per Level)
+  };
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
@@ -102,7 +108,7 @@ input ENUM_LOT_MODE        InpLotMode              = LOT_MODE_AUTOMATIC;        
 input ENUM_RISK_LEVEL      InpAutoRiskLevel        = RISK_LEVEL_MEDIUM;          // Auto Lot Risk Level
 input double               InpFixedLotSize         = 0.01;                       // Fixed Lot Size
 input double               InpFixedLotPerBalance   = 500.0;                      // Balance Step for Fixed Lot ($ per 0.01)
-input int                  InpMaxOrders            = 100;                        // Maximum Open Positions
+input int                  InpMaxOrdersTotal       = 100;                        // Maximum Total Positions Across Entire Account
 input ENUM_DRAWDOWN_MODE   InpDrawdownMode         = DRAWDOWN_OFF;               // Drawdown Protection Mode
 input double               InpDrawdownThreshold    = 0.0;                        // Drawdown Threshold (% or Money)
 input bool                 InpPushNotifications    = false;                      // MQID Push Notifications
@@ -114,8 +120,19 @@ input ENUM_TRADE_DIRECTION InpTradeDirection       = TRADE_DIRECTION_PER_STRATEG
 
 //--- First-Instinct (One-Shot) Trading Logic
 input group ">>>> First-Instinct (One-Shot) Settings"
-input bool                 InpOneShotPerSession    = true;                       // One-Shot: 1 Trade Per Session Only (First Instinct)
+input bool                 InpOneShotPerSession    = true;                       // One-Shot: 1 Initial Trade Per Session Only (First Instinct)
 input bool                 InpFreshCrossOnly       = true;                       // Require Fresh Signal Cross (No Late Entry)
+
+//--- Grid Recovery & Spacing Settings
+input group ">>>> Grid Recovery & Spacing Settings"
+input bool                   InpEnableGridRecovery   = true;                       // Enable Grid Recovery System
+input ENUM_GRID_SPACING_MODE InpGridSpacingMode      = GRID_SPACING_EXPANDING_MULT;// Grid Spacing Mode (Original 100% vs Expanding)
+input int                    InpMaxBasketOrders      = 5;                          // Max Orders Allowed per Basket (1 Initial + N Recovery)
+input double                 InpGridBaseDistance     = 200.0;                      // Base Grid Step Distance (Points)
+input double                 InpGridStepMultiplier   = 1.5;                        // Grid Step Distance Multiplier (for Expanding Mode)
+input double                 InpGridLotMultiplier    = 1.2;                        // Recovery Lot Multiplier (1.0 = Fixed Lot, >1.0 = Scaling)
+input int                    InpBasketTakeProfit     = 150;                        // Basket Take Profit (Points above Avg Price for 2+ Orders)
+input bool                   InpCutLossOnMaxStep     = true;                       // Hard Cut-Loss on (MaxOrders + 1) Step Distance
 
 //--- Presets & Individual Strategies
 input group ">>>> Presets & Strategy Toggles"
@@ -277,10 +294,12 @@ ulong StrategyMagic(const int slot)
 //+------------------------------------------------------------------+
 //| Generate Order Comment with Strategy Tag                         |
 //+------------------------------------------------------------------+
-string SafeComment(const int slot)
+string SafeComment(const int slot, const int order_idx = 0)
   {
-   string prefix = StringSubstr(InpTradeCommentPrefix, 0, 15);
-   return (prefix + StrategyTag(slot));
+   string prefix = StringSubstr(InpTradeCommentPrefix, 0, 11);
+   if(order_idx == 0)
+      return (prefix + StrategyTag(slot));
+   return (prefix + StrategyTag(slot) + StringFormat("_R%d", order_idx));
   }
 
 //+------------------------------------------------------------------+
@@ -362,32 +381,41 @@ double NormalizePrice(const double price)
 //+------------------------------------------------------------------+
 //| Calculate Trade Volume Based on Sizing Mode                      |
 //+------------------------------------------------------------------+
-double CalculateLotVolume()
+double CalculateLotVolume(const int order_level = 0)
   {
+   double base_lot = 0.01;
    if(InpLotMode == LOT_MODE_FIXED)
-      return NormalizeLotVolume(InpFixedLotSize);
-
-   if(InpLotMode == LOT_MODE_FIXED_PER_BALANCE)
+     {
+      base_lot = InpFixedLotSize;
+     }
+   else if(InpLotMode == LOT_MODE_FIXED_PER_BALANCE)
      {
       double unit = MathMax(1.0, InpFixedLotPerBalance);
-      return NormalizeLotVolume(AccountInfoDouble(ACCOUNT_BALANCE) / unit * InpFixedLotSize);
+      base_lot = AccountInfoDouble(ACCOUNT_BALANCE) / unit * InpFixedLotSize;
+     }
+   else
+     {
+      static const double divisor_high[7]  = {2000.0, 1200.0, 800.0, 600.0, 500.0, 400.0, 300.0};
+      static const double divisor_other[7] = {2000.0, 1500.0, 1000.0, 800.0, 600.0, 550.0, 400.0};
+
+      int level = (int)InpAutoRiskLevel;
+      if(level < 0 || level > 6)
+         return 0.0;
+
+      double divisor = divisor_high[level];
+      if(InpPreset >= PRESET_ICVT_LOW)
+         divisor = divisor_other[level];
+
+      if(InpPreset == PRESET_FUSION_ZERO && level == 6)
+         divisor = 300.0;
+
+      base_lot = AccountInfoDouble(ACCOUNT_BALANCE) / divisor * 0.01;
      }
 
-   static const double divisor_high[7]  = {2000.0, 1200.0, 800.0, 600.0, 500.0, 400.0, 300.0};
-   static const double divisor_other[7] = {2000.0, 1500.0, 1000.0, 800.0, 600.0, 550.0, 400.0};
+   if(order_level > 0 && InpGridLotMultiplier > 1.0)
+      base_lot = base_lot * MathPow(InpGridLotMultiplier, order_level);
 
-   int level = (int)InpAutoRiskLevel;
-   if(level < 0 || level > 6)
-      return 0.0;
-
-   double divisor = divisor_high[level];
-   if(InpPreset >= PRESET_ICVT_LOW)
-      divisor = divisor_other[level];
-
-   if(InpPreset == PRESET_FUSION_ZERO && level == 6)
-      divisor = 300.0;
-
-   return NormalizeLotVolume(AccountInfoDouble(ACCOUNT_BALANCE) / divisor * 0.01);
+   return NormalizeLotVolume(base_lot);
   }
 
 //+------------------------------------------------------------------+
@@ -401,7 +429,10 @@ bool IsOurPosition(const ulong ticket, const int slot = -1)
       PositionGetString(POSITION_SYMBOL) != _Symbol)
       return false;
    if(slot >= 0)
-      return (PositionGetString(POSITION_COMMENT) == SafeComment(slot));
+     {
+      string comment = PositionGetString(POSITION_COMMENT);
+      return (StringFind(comment, StrategyTag(slot)) >= 0);
+     }
    return true;
   }
 
@@ -712,13 +743,203 @@ void ApplyBreakEvenAndTrailing(const int slot)
   }
 
 //+------------------------------------------------------------------+
-//| Manage Position State for Strategy Slot                          |
+//| Calculate Basket Statistics for a Specific Strategy Slot         |
+//+------------------------------------------------------------------+
+int GetStrategyBasketStats(const int slot, double &avg_price, double &total_vol, double &latest_price, long &pos_type)
+  {
+   int count = 0;
+   avg_price = 0.0;
+   total_vol = 0.0;
+   latest_price = 0.0;
+   pos_type = -1;
+   datetime latest_open_time = 0;
+   double cost_sum = 0.0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!IsOurPosition(ticket, slot))
+         continue;
+
+      double vol   = PositionGetDouble(POSITION_VOLUME);
+      double price = PositionGetDouble(POSITION_PRICE_OPEN);
+      long   type  = PositionGetInteger(POSITION_TYPE);
+      datetime op_time = (datetime)PositionGetInteger(POSITION_TIME);
+
+      cost_sum += price * vol;
+      total_vol += vol;
+      pos_type = type;
+      count++;
+
+      if(op_time >= latest_open_time)
+        {
+         latest_open_time = op_time;
+         latest_price = price;
+        }
+     }
+
+   if(total_vol > 0.0)
+      avg_price = NormalizePrice(cost_sum / total_vol);
+
+   return count;
+  }
+
+//+------------------------------------------------------------------+
+//| Calculate Step Distance for Next Recovery Order (Points)         |
+//+------------------------------------------------------------------+
+double CalculateStepDistance(const int current_count)
+  {
+   if(InpGridSpacingMode == GRID_SPACING_ORIGINAL_FIXED || current_count <= 1)
+      return InpGridBaseDistance;
+
+   // Expanding Mode: Step Distance Multiplier per Level (*ระยะ เมื่อจำนวนไม้เพิ่มขึ้น)
+   // Level 2 (current_count == 1): InpGridBaseDistance * (mult^0) = Base
+   // Level 3 (current_count == 2): InpGridBaseDistance * (mult^1)
+   // Level 4 (current_count == 3): InpGridBaseDistance * (mult^2)
+   double mult = MathMax(1.0, InpGridStepMultiplier);
+   return InpGridBaseDistance * MathPow(mult, current_count - 1);
+  }
+
+//+------------------------------------------------------------------+
+//| Manage Position State for Strategy Slot (Grid Recovery Engine)   |
 //+------------------------------------------------------------------+
 void ManageStrategy(const int slot)
   {
-   if(!StrategyEnabled(slot) || StrategyPositionCount(slot) <= 0)
+   if(!StrategyEnabled(slot))
       return;
-   ApplyBreakEvenAndTrailing(slot);
+
+   double avg_price = 0.0, total_vol = 0.0, latest_price = 0.0;
+   long   pos_type  = -1;
+   int    count     = GetStrategyBasketStats(slot, avg_price, total_vol, latest_price, pos_type);
+   if(count <= 0)
+      return;
+
+   double point = _Point;
+   if(point <= 0.0) point = 0.01;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // =============================================================
+   // 1. Take Profit Management (Basket TP vs Single Order)
+   // =============================================================
+   // Basket Take Profit for 2 or more open positions
+   if(count >= 2 && InpBasketTakeProfit > 0)
+     {
+      double basket_tp = (pos_type == POSITION_TYPE_BUY) ?
+                         NormalizePrice(avg_price + InpBasketTakeProfit * point) :
+                         NormalizePrice(avg_price - InpBasketTakeProfit * point);
+
+      bool basket_tp_hit = (pos_type == POSITION_TYPE_BUY && bid >= basket_tp) ||
+                           (pos_type == POSITION_TYPE_SELL && ask <= basket_tp);
+
+      if(basket_tp_hit)
+        {
+         PrintFormat("🎯 [Basket TP Hit] Strategy %d closed %d positions at target %.2f (Avg: %.2f)",
+                     slot + 1, count, basket_tp, avg_price);
+         CloseStrategy(slot, "Basket Take Profit");
+         return;
+        }
+     }
+   else if(count == 1)
+     {
+      // Single Initial One-Shot order management (Break-Even & Trailing Stop)
+      ApplyBreakEvenAndTrailing(slot);
+     }
+
+   // =============================================================
+   // 2. Grid Recovery Engine (Original 100% vs Expanding Multiplier)
+   // =============================================================
+   if(!InpEnableGridRecovery || g_is_paused)
+      return;
+
+   // Calculate step distance for next recovery order
+   double step_pts  = CalculateStepDistance(count);
+   double step_dist = step_pts * point;
+
+   if(pos_type == POSITION_TYPE_BUY)
+     {
+      double next_trigger_price = latest_price - step_dist;
+
+      if(bid <= next_trigger_price)
+        {
+         // Case A: Within allowed basket size -> Open Recovery Order
+         if(count < InpMaxBasketOrders)
+           {
+            if(TotalOurPositionsCount() >= InpMaxOrdersTotal)
+               return;
+
+            double rec_vol = CalculateLotVolume(count);
+            if(rec_vol <= 0.0)
+               return;
+
+            if(!CheckSpreadAllowsEntry() || !CheckMarginAllowsEntry(1, rec_vol))
+               return;
+
+            g_trade.SetExpertMagicNumber(StrategyMagic(slot));
+            g_trade.SetDeviationInPoints((ulong)MathMax(0, InpMaxSlippage));
+
+            double sl_price = (InpStopLoss > 0) ? NormalizePrice(ask - InpStopLoss * point) : 0.0;
+            double tp_price = (InpTakeProfit > 0) ? NormalizePrice(ask + InpTakeProfit * point) : 0.0;
+
+            if(g_trade.Buy(rec_vol, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot, count)))
+              {
+               PrintFormat("🛡️ [Grid Recovery BUY] Order #%d for Strategy %d opened at %.2f (Step: %.1f pts | Mode: %s)",
+                           count + 1, slot + 1, ask, step_pts,
+                           (InpGridSpacingMode == GRID_SPACING_ORIGINAL_FIXED ? "100% Original Fixed" : "Expanding Multiplier"));
+              }
+           }
+         // Case B: Reached InpMaxBasketOrders -> Hard Cut-Loss on (MaxOrders + 1) step
+         else if(count >= InpMaxBasketOrders && InpCutLossOnMaxStep)
+           {
+            PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached MaxBasketOrders (%d) + 1 step distance (%.2f <= %.2f) -> Closing basket!",
+                        slot + 1, InpMaxBasketOrders, bid, next_trigger_price);
+            CloseStrategy(slot, "Grid Max Step Cut-Loss");
+            return;
+           }
+        }
+     }
+   else if(pos_type == POSITION_TYPE_SELL)
+     {
+      double next_trigger_price = latest_price + step_dist;
+
+      if(ask >= next_trigger_price)
+        {
+         // Case A: Within allowed basket size -> Open Recovery Order
+         if(count < InpMaxBasketOrders)
+           {
+            if(TotalOurPositionsCount() >= InpMaxOrdersTotal)
+               return;
+
+            double rec_vol = CalculateLotVolume(count);
+            if(rec_vol <= 0.0)
+               return;
+
+            if(!CheckSpreadAllowsEntry() || !CheckMarginAllowsEntry(-1, rec_vol))
+               return;
+
+            g_trade.SetExpertMagicNumber(StrategyMagic(slot));
+            g_trade.SetDeviationInPoints((ulong)MathMax(0, InpMaxSlippage));
+
+            double sl_price = (InpStopLoss > 0) ? NormalizePrice(bid + InpStopLoss * point) : 0.0;
+            double tp_price = (InpTakeProfit > 0) ? NormalizePrice(bid - InpTakeProfit * point) : 0.0;
+
+            if(g_trade.Sell(rec_vol, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot, count)))
+              {
+               PrintFormat("🛡️ [Grid Recovery SELL] Order #%d for Strategy %d opened at %.2f (Step: %.1f pts | Mode: %s)",
+                           count + 1, slot + 1, bid, step_pts,
+                           (InpGridSpacingMode == GRID_SPACING_ORIGINAL_FIXED ? "100% Original Fixed" : "Expanding Multiplier"));
+              }
+           }
+         // Case B: Reached InpMaxBasketOrders -> Hard Cut-Loss on (MaxOrders + 1) step
+         else if(count >= InpMaxBasketOrders && InpCutLossOnMaxStep)
+           {
+            PrintFormat("🚨 [Grid Cut-Loss] Strategy %d reached MaxBasketOrders (%d) + 1 step distance (%.2f >= %.2f) -> Closing basket!",
+                        slot + 1, InpMaxBasketOrders, ask, next_trigger_price);
+            CloseStrategy(slot, "Grid Max Step Cut-Loss");
+            return;
+           }
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -916,10 +1137,10 @@ void ProcessStrategy(const int slot)
    if(StrategyPositionCount(slot) > 0)
       return;
 
-   if(TotalOurPositionsCount() >= InpMaxOrders)
+   if(TotalOurPositionsCount() >= InpMaxOrdersTotal)
       return;
 
-   double volume = CalculateLotVolume();
+   double volume = CalculateLotVolume(0);
    if(volume <= 0.0)
       return;
 
@@ -940,7 +1161,7 @@ void ProcessStrategy(const int slot)
          sl_price = NormalizePrice(ask - InpStopLoss * _Point);
       if(InpTakeProfit > 0)
          tp_price = NormalizePrice(ask + InpTakeProfit * _Point);
-      opened = g_trade.Buy(volume, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot));
+      opened = g_trade.Buy(volume, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot, 0));
      }
    else
      {
@@ -949,7 +1170,7 @@ void ProcessStrategy(const int slot)
          sl_price = NormalizePrice(bid + InpStopLoss * _Point);
       if(InpTakeProfit > 0)
          tp_price = NormalizePrice(bid - InpTakeProfit * _Point);
-      opened = g_trade.Sell(volume, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot));
+      opened = g_trade.Sell(volume, _Symbol, 0.0, sl_price, tp_price, SafeComment(slot, 0));
      }
 
    if(opened)
@@ -1187,11 +1408,13 @@ void UpdatePanel()
    double total_pl = TotalStrategyProfit();
    color  pl_color = (total_pl >= 0.0 ? C'75,225,125' : C'255,95,95');
 
-   // Column 1: System Performance & Account Metrics
-   SetPanelLine(0, "Execution Mode: One-Shot (1 Trade/Session: " + (InpOneShotPerSession ? "ENABLED" : "DISABLED") + ")",
+   string grid_info = (!InpEnableGridRecovery ? "Disabled" :
+                       (InpGridSpacingMode == GRID_SPACING_ORIGINAL_FIXED ? "100% Fixed (" + DoubleToString(InpGridBaseDistance, 0) + "pts)" :
+                        "Expanding x" + DoubleToString(InpGridStepMultiplier, 1)));
+   SetPanelLine(0, "Execution: One-Shot (1st Instinct: " + (InpOneShotPerSession ? "1/Session" : "Unlimited") + ")",
                 (InpOneShotPerSession ? C'255,185,50' : C'160,165,175'));
-   SetPanelLine(1, "Signal Trigger: Fresh Cross Only: " + (InpFreshCrossOnly ? "ENABLED" : "OFF"),
-                (InpFreshCrossOnly ? C'0,195,255' : C'160,165,175'));
+   SetPanelLine(1, "Recovery Grid: " + grid_info + " | Max: " + IntegerToString(InpMaxBasketOrders),
+                (InpEnableGridRecovery ? C'0,195,255' : C'160,165,175'));
    SetPanelLine(2, "Lot Sizing Mode: " + LotModeText());
    SetPanelLine(3, "Auto Risk Level: " + (InpLotMode == LOT_MODE_AUTOMATIC ? RiskLevelText() : "---"));
    SetPanelLine(4, "Fixed Lot: " + (InpLotMode == LOT_MODE_FIXED ? DoubleToString(InpFixedLotSize, 2) : "---") +
@@ -1251,7 +1474,10 @@ void UpdatePanel()
       else if(count > 0)
         {
          double profit = StrategyProfit(slot);
-         status_text = StringFormat("   In Trade (%d pos) | P/L: %.2f %s", count, profit, currency);
+         if(count > 1)
+            status_text = StringFormat("   Grid Active (%d pos) | P/L: %.2f %s", count, profit, currency);
+         else
+            status_text = StringFormat("   In Trade (1 pos) | P/L: %.2f %s", profit, currency);
          status_clr  = (profit >= 0.0 ? C'75,225,125' : C'255,95,95');
         }
       else if(!inside_hour)
