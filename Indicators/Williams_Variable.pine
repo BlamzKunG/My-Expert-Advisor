@@ -1,0 +1,527 @@
+//@version=6
+indicator(title = "Williams Variable A/D Pressure [MarkitTick]", overlay = false, precision = 2, format = format.volume, max_labels_count = 500)
+
+// ── INPUTS ─────────────────────────────────────────────────
+var string GRP_CORE = "⚙️ Core Settings"
+i_wvadLen  = input.int(20, "WVAD Period", group = GRP_CORE, minval = 1, tooltip = "Summation length for Williams' Variable A/D")
+i_sigLen   = input.int(9, "Signal Length", group = GRP_CORE, minval = 1)
+
+var string GRP_FILT = "🕯️ Filters"
+i_useHtf        = input.bool(false, "🕐 Use HTF Confirmation", group = GRP_FILT)
+i_htfTf         = input.timeframe("60", "HTF Timeframe", group = GRP_FILT)
+i_useAdxFilter  = input.bool(false, "📈 Use ADX Filter", group = GRP_FILT)
+i_adxThresh     = input.float(20.0, "ADX Threshold", group = GRP_FILT, minval = 0, step = 0.5)
+i_adxLen        = input.int(14, "ADX Length", group = GRP_FILT, minval = 1)
+i_adaptFilterType = input.string("SMA", "🧠 Adaptive Filter", options = ["None", "SMA", "EMA", "RMA", "Double WMA", "Triple VWMA", "HMA", "LLAMA", "Kalman Filter"], group = GRP_FILT)
+i_adaptFilterLen  = input.int(9, "Adaptive Filter Length", group = GRP_FILT, minval = 1, maxval = 500)
+
+var string GRP_TRADE = "📐 Trade Tools"
+i_lockSignal = input.bool(false, "🔒 Lock Signal", group = GRP_TRADE, tooltip = "Freeze current signal · block new ones")
+i_showLevels = input.bool(true, "Show Trade Levels", group = GRP_TRADE)
+i_slMult     = input.float(1.5, "SL × ATR", group = GRP_TRADE, minval = 0.1, step = 0.1)
+i_tp1Mult    = input.float(1.0, "TP1 × R", group = GRP_TRADE, minval = 0.1, step = 0.1)
+i_tp2Mult    = input.float(2.0, "TP2 × R", group = GRP_TRADE, minval = 0.1, step = 0.1)
+i_tp3Mult    = input.float(3.0, "TP3 × R", group = GRP_TRADE, minval = 0.1, step = 0.1)
+i_atrLen     = input.int(14, "ATR Length", group = GRP_TRADE, minval = 1)
+
+var string GRP_VIS = "🎨 Visuals"
+i_showHist    = input.bool(true, "Show Histogram", group = GRP_VIS)
+i_showLines   = input.bool(true, "Show WVAD/Signal Lines", group = GRP_VIS)
+i_showMarkers = input.bool(true, "Show Signal Markers", group = GRP_VIS)
+i_showZero    = input.bool(true, "Show Zero Line", group = GRP_VIS)
+i_showCandles = input.bool(true, "Color Candles", group = GRP_VIS)
+
+var string GRP_DASH = "📊 Dashboard"
+i_showDash = input.bool(true, "Show Dashboard", group = GRP_DASH)
+i_dashPos  = input.string("Top Right", "Position", group = GRP_DASH, options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"])
+
+var string GRP_WH = "🔔 Alerts"
+i_actionLong       = input.string("long", "↑ Long Action", group = GRP_WH)
+i_actionShort      = input.string("short", "↓ Short Action", group = GRP_WH)
+i_actionCloseLong  = input.string("closelong", "✕ Close Long Action", group = GRP_WH)
+i_actionCloseShort = input.string("closeshort", "✕ Close Short Action", group = GRP_WH)
+i_actionTp1        = input.string("tp1", "◆ TP1 Hit Action", group = GRP_WH)
+i_actionTp2        = input.string("tp2", "✦ TP2 Hit Action", group = GRP_WH)
+i_actionTp3        = input.string("tp3", "◆ TP3 Hit Action", group = GRP_WH)
+i_actionSl          = input.string("sl", "✕ SL Hit Action", group = GRP_WH)
+
+var string GRP_COL = "🌈 Colors"
+c_wvadLine    = input.color(color.new(#2196f3, 0), "WVAD Line", group = GRP_COL)
+c_sigLine     = input.color(color.new(#ff9800, 0), "Signal Line", group = GRP_COL)
+c_histUp1     = input.color(color.new(#26a69a, 0), "Hist Rising +", group = GRP_COL)
+c_histUp2     = input.color(color.new(#26a69a, 60), "Hist Falling +", group = GRP_COL)
+c_histDn1     = input.color(color.new(#ef5350, 0), "Hist Falling -", group = GRP_COL)
+c_histDn2     = input.color(color.new(#ef5350, 60), "Hist Rising -", group = GRP_COL)
+c_zeroLine    = input.color(color.new(#787b86, 50), "Zero Line", group = GRP_COL)
+c_markerLong  = input.color(color.new(#26a69a, 0), "Long Marker", group = GRP_COL)
+c_markerShort = input.color(color.new(#ef5350, 0), "Short Marker", group = GRP_COL)
+c_markerTxt   = input.color(color.new(#ffffff, 0), "Signal Marker Text", group = GRP_COL)
+c_candBullBody = input.color(color.new(#26a69a, 0), "Candle Bull Body", group = GRP_COL)
+c_candBearBody = input.color(color.new(#ef5350, 0), "Candle Bear Body", group = GRP_COL)
+c_candNeutBody = input.color(color.new(#787b86, 0), "Candle Neutral Body", group = GRP_COL)
+c_candBullBrd  = input.color(color.new(#26a69a, 0), "Candle Bull Border", group = GRP_COL)
+c_candBearBrd  = input.color(color.new(#ef5350, 0), "Candle Bear Border", group = GRP_COL)
+c_candNeutBrd  = input.color(color.new(#787b86, 0), "Candle Neutral Border", group = GRP_COL)
+c_slLevel      = input.color(color.new(#ef5350, 0), "SL Level", group = GRP_COL)
+c_entryLevel   = input.color(color.new(#2196f3, 0), "Entry Level", group = GRP_COL)
+c_tp1Level     = input.color(color.new(#26a69a, 40), "TP1 Level", group = GRP_COL)
+c_tp2Level     = input.color(color.new(#26a69a, 20), "TP2 Level", group = GRP_COL)
+c_tp3Level     = input.color(color.new(#26a69a, 0), "TP3 Level", group = GRP_COL)
+c_riskFill     = input.color(color.new(#ef5350, 80), "Risk Fill", group = GRP_COL)
+c_rewardFill   = input.color(color.new(#26a69a, 85), "Reward Fill", group = GRP_COL)
+c_lvlTxt       = input.color(color.new(#ffffff, 0), "Level Label Text", group = GRP_COL)
+C_DASH_HDR    = input.color(color.new(#3a2a6d, 55), "Dash Header", group = GRP_COL)
+C_DASH_BG     = input.color(color.new(#0a0f1a, 10), "Dash Background", group = GRP_COL)
+C_DASH_TXT    = input.color(color.new(#ffffff, 0), "Dash Text", group = GRP_COL)
+C_SUP         = input.color(color.new(#26a69a, 0), "Bullish Value", group = GRP_COL)
+C_RES         = input.color(color.new(#ef5350, 0), "Bearish Value", group = GRP_COL)
+
+// ── CORE LOGIC ────────────────────────────────────────────
+f_sma(float src, int len) =>
+    ta.sma(src, len)
+
+f_ema(float src, int len) =>
+    ta.ema(src, len)
+
+f_rma(float src, int len) =>
+    ta.rma(src, len)
+
+f_doubleWma(float src, int len) =>
+    float _wma1 = ta.wma(src, len)
+    float _wma2 = ta.wma(_wma1, len)
+    _wma2
+
+f_tripleVwma(float src, int len) =>
+    float _vwma1 = ta.vwma(src, len)
+    float _vwma2 = ta.vwma(_vwma1, len)
+    float _vwma3 = ta.vwma(_vwma2, len)
+    _vwma3
+
+f_hma(float src, int len) =>
+    ta.hma(src, len)
+
+f_kalman(float src, int len) =>
+    var float _est = na
+    var float _err = 1.0
+    float _q = 1.0 / len
+    float _r = 1.0
+    _est := na(_est) ? src : _est
+    float _predErr = _err + _q
+    float _gain = _predErr / (_predErr + _r)
+    _est := _est + _gain * (src - _est)
+    _err := (1 - _gain) * _predErr
+    _est
+
+f_llama(float src, int len) =>
+    float _mean = ta.sma(src, len)
+    float _slope = (src - src[len]) / len
+    _mean + _slope * (len / 2)
+
+f_bar(float val, float maxVal) =>
+    int filled = math.round(math.min(val / maxVal, 1.0) * 10)
+    string bar = ""
+    for i = 1 to 10
+        bar += i <= filled ? "█" : "░"
+    bar + "  " + str.tostring(math.round(math.min(val / maxVal, 1.0) * 100)) + "%"
+
+f_barColor(float pct) =>
+    pct >= 0.66 ? color.new(#26a69a, 0) : pct >= 0.33 ? color.new(#f9a825, 0) : color.new(#ef5350, 0)
+
+f_tf() =>
+    string _u = str.substring(timeframe.period, str.length(timeframe.period) - 1, str.length(timeframe.period))
+    float _tfNum = str.tonumber(timeframe.period)
+    _u == "S" ? timeframe.period :
+     _u == "D" ? timeframe.period :
+     _u == "W" ? timeframe.period :
+     _u == "M" ? timeframe.period :
+     na(_tfNum) ? timeframe.period :
+     _tfNum % 60 == 0 ? str.tostring(_tfNum / 60) + "H" :
+     timeframe.period + "m"
+
+f_num(float val) =>
+    float _a = math.abs(val)
+    string _s = val < 0 ? "-" : ""
+    _a >= 1000000000 ? _s + str.tostring(_a / 1000000000, "#.#") + "B" :
+     _a >= 1000000 ? _s + str.tostring(_a / 1000000, "#.#") + "M" :
+     _a >= 1000 ? _s + str.tostring(_a / 1000, "#.#") + "K" :
+     _s + str.tostring(_a, "#")
+
+float rawWvad = high != low ? (close - open) / (high - low) * volume : 0.0
+float wvadSum = ta.sma(rawWvad, i_wvadLen) * i_wvadLen
+max_bars_back(wvadSum, 500)
+
+float _adaptedSrc = i_adaptFilterType == "SMA"           ? f_sma(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "EMA"           ? f_ema(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "RMA"           ? f_rma(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "Double WMA"    ? f_doubleWma(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "Triple VWMA"   ? f_tripleVwma(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "HMA"           ? f_hma(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "LLAMA"         ? f_llama(wvadSum, i_adaptFilterLen) :
+ i_adaptFilterType == "Kalman Filter" ? f_kalman(wvadSum, i_adaptFilterLen) : wvadSum
+
+float finalWvad = _adaptedSrc
+float signalLine = ta.sma(finalWvad, i_sigLen)
+float histWvad = finalWvad - signalLine
+
+[_, __, _adxVal] = ta.dmi(i_adxLen, i_adxLen)
+bool _adxPass = not i_useAdxFilter or _adxVal[1] >= i_adxThresh
+
+[htfClose, htfOpen] = request.security(syminfo.tickerid, i_htfTf, [close[1], open[1]], lookahead = barmerge.lookahead_on)
+bool htfBullish = htfClose > htfOpen
+bool htfBearish = htfClose < htfOpen
+bool _htfPassLong  = not i_useHtf or htfBullish
+bool _htfPassShort = not i_useHtf or htfBearish
+
+bool _rawLongSignal  = ta.crossover(finalWvad[1], signalLine[1])
+bool _rawShortSignal = ta.crossunder(finalWvad[1], signalLine[1])
+
+bool longSignal  = _rawLongSignal  and _adxPass and _htfPassLong
+bool shortSignal = _rawShortSignal and _adxPass and _htfPassShort
+
+float avgVol = ta.sma(volume, 20)
+float volRatio = avgVol > 0 ? volume / avgVol : 0.0
+float volPct = avgVol > 0 ? math.min(volRatio / 2.0, 1.0) : 0.0
+
+float strengthMax = ta.highest(math.abs(finalWvad), 100)
+float strengthRaw = strengthMax > 0 ? math.abs(finalWvad) / strengthMax : 0.0
+
+float _atr = ta.atr(i_atrLen)
+
+var line slLine     = na
+var line entryLine  = na
+var line tp1Line    = na
+var line tp2Line    = na
+var line tp3Line    = na
+var label slLbl     = na
+var label entryLbl  = na
+var label tp1Lbl    = na
+var label tp2Lbl    = na
+var label tp3Lbl    = na
+var linefill riskFill   = na
+var linefill rewardFill = na
+
+var float entryPrice = na
+var float slPrice    = na
+var float tp1Price   = na
+var float tp2Price   = na
+var float tp3Price   = na
+var bool  isLong     = false
+var bool  tp1Hit     = false
+var bool  tp2Hit     = false
+var bool  tp3Hit     = false
+var bool  slHit      = false
+
+bool _locked     = i_lockSignal and barstate.islast
+bool _calcLevels = (longSignal or shortSignal) and not _locked
+bool _drawLevels = i_showLevels and _calcLevels
+
+var int _closeBar = na
+
+f_pctTxt(float lvl, float entry, bool dir) =>
+    float _p = (dir ? lvl - entry : entry - lvl) / entry * 100
+    (_p >= 0 ? "+" : "") + str.tostring(_p, "#.00") + "%"
+
+f_deleteLevels() =>
+    line.delete(slLine)
+    line.delete(entryLine)
+    line.delete(tp1Line)
+    line.delete(tp2Line)
+    line.delete(tp3Line)
+    label.delete(slLbl)
+    label.delete(entryLbl)
+    label.delete(tp1Lbl)
+    label.delete(tp2Lbl)
+    label.delete(tp3Lbl)
+    linefill.delete(riskFill)
+    linefill.delete(rewardFill)
+
+if _calcLevels
+    tp1Hit    := false
+    tp2Hit    := false
+    tp3Hit    := false
+    slHit     := false
+    _closeBar := na
+    isLong     := longSignal
+    entryPrice := close[1]
+    float _risk = _atr[1] * i_slMult
+    slPrice  := longSignal ? close[1] - _risk : close[1] + _risk
+    tp1Price := longSignal ? close[1] + _risk * i_tp1Mult : close[1] - _risk * i_tp1Mult
+    tp2Price := longSignal ? close[1] + _risk * i_tp2Mult : close[1] - _risk * i_tp2Mult
+    tp3Price := longSignal ? close[1] + _risk * i_tp3Mult : close[1] - _risk * i_tp3Mult
+
+bool _tp1Cross = not na(tp1Price) and (isLong ? high >= tp1Price : low  <= tp1Price)
+bool _tp2Cross = not na(tp2Price) and (isLong ? high >= tp2Price : low  <= tp2Price)
+bool _tp3Cross = not na(tp3Price) and (isLong ? high >= tp3Price : low  <= tp3Price)
+bool _slCross  = not na(slPrice)  and (isLong ? low  <= slPrice  : high >= slPrice)
+
+bool _tp1Fire = not na(tp1Price) and not tp1Hit and not slHit and _tp1Cross
+bool _tp2Fire = not na(tp2Price) and not tp2Hit and not slHit and _tp2Cross
+bool _tp3Fire = not na(tp3Price) and not tp3Hit and not slHit and _tp3Cross
+bool _slFire  = not na(slPrice)  and not slHit  and _slCross
+
+// ── ALERTS ────────────────────────────────────────────────
+string _longInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"long","entry":"{3}","wvad":"{4}","signal":"{5}"',
+ i_actionLong, syminfo.tickerid, timeframe.period,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(finalWvad, format.mintick),
+ str.tostring(signalLine, format.mintick))
+string longPayload = "{" + _longInner + "}"
+
+string _shortInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"short","entry":"{3}","wvad":"{4}","signal":"{5}"',
+ i_actionShort, syminfo.tickerid, timeframe.period,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(finalWvad, format.mintick),
+ str.tostring(signalLine, format.mintick))
+string shortPayload = "{" + _shortInner + "}"
+
+string _closeLongInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"closelong"',
+ i_actionCloseLong, syminfo.tickerid, timeframe.period)
+string closeLongPayload = "{" + _closeLongInner + "}"
+
+string _closeShortInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"closeshort"',
+ i_actionCloseShort, syminfo.tickerid, timeframe.period)
+string closeShortPayload = "{" + _closeShortInner + "}"
+
+if longSignal and barstate.isconfirmed
+    alert(closeShortPayload, alert.freq_once_per_bar_close)
+if longSignal and barstate.isconfirmed
+    alert(longPayload, alert.freq_once_per_bar_close)
+if shortSignal and barstate.isconfirmed
+    alert(closeLongPayload, alert.freq_once_per_bar_close)
+if shortSignal and barstate.isconfirmed
+    alert(shortPayload, alert.freq_once_per_bar_close)
+
+alertcondition(longSignal  and barstate.isconfirmed, "BUY Signal",         "MarkitTick — WVADP BUY Signal Fired")
+alertcondition(shortSignal and barstate.isconfirmed, "SELL Signal",        "MarkitTick — WVADP SELL Signal Fired")
+alertcondition(shortSignal and barstate.isconfirmed, "Close Long Signal",  "MarkitTick — Close Long")
+alertcondition(longSignal  and barstate.isconfirmed, "Close Short Signal", "MarkitTick — Close Short")
+
+string _tpDir = isLong ? "long" : "short"
+string _tp1Inner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"{3}","entry":"{4}","tp":"{5}"',
+ i_actionTp1, syminfo.tickerid, timeframe.period, _tpDir,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(tp1Price, format.mintick))
+string tp1Payload = "{" + _tp1Inner + "}"
+
+string _tp2Inner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"{3}","entry":"{4}","tp":"{5}"',
+ i_actionTp2, syminfo.tickerid, timeframe.period, _tpDir,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(tp2Price, format.mintick))
+string tp2Payload = "{" + _tp2Inner + "}"
+
+string _tp3Inner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"{3}","entry":"{4}","tp":"{5}"',
+ i_actionTp3, syminfo.tickerid, timeframe.period, _tpDir,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(tp3Price, format.mintick))
+string tp3Payload = "{" + _tp3Inner + "}"
+
+string _slInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"{3}","entry":"{4}","sl":"{5}"',
+ i_actionSl, syminfo.tickerid, timeframe.period, _tpDir,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(slPrice, format.mintick))
+string slPayload = "{" + _slInner + "}"
+
+if _tp1Fire
+    alert(tp1Payload, alert.freq_once_per_bar)
+if _tp2Fire
+    alert(tp2Payload, alert.freq_once_per_bar)
+if _tp3Fire
+    alert(tp3Payload, alert.freq_once_per_bar)
+if _slFire
+    alert(slPayload, alert.freq_once_per_bar)
+
+alertcondition(_tp1Fire, "TP1 Hit", "MarkitTick — WVADP TP1 Hit")
+alertcondition(_tp2Fire, "TP2 Hit", "MarkitTick — WVADP TP2 Hit")
+alertcondition(_tp3Fire, "TP3 Hit", "MarkitTick — WVADP TP3 Hit")
+alertcondition(_slFire, "SL Hit", "MarkitTick — WVADP SL Hit")
+
+// ── VISUALS ───────────────────────────────────────────────
+color _histColor = histWvad >= 0 ? (histWvad >= histWvad[1] ? c_histUp1 : c_histUp2) : (histWvad <= histWvad[1] ? c_histDn1 : c_histDn2)
+plot(i_showZero ? 0.0 : na, "Zero Line", color = c_zeroLine, style = plot.style_line, linewidth = 1)
+plot(i_showHist ? histWvad : na, "Histogram", color = _histColor, style = plot.style_columns)
+plot(i_showLines ? finalWvad : na, "WVAD", color = c_wvadLine, linewidth = 2)
+plot(i_showLines ? signalLine : na, "Signal", color = c_sigLine, linewidth = 1)
+if i_showMarkers and longSignal
+    label.new(bar_index, finalWvad, "BULL", style = label.style_label_up, color = c_markerLong, textcolor = c_markerTxt, size = size.small)
+    label.new(bar_index, na, "BULL", yloc = yloc.belowbar, style = label.style_label_up, color = c_markerLong, textcolor = c_markerTxt, size = size.small, force_overlay = true)
+if i_showMarkers and shortSignal
+    label.new(bar_index, finalWvad, "BEAR", style = label.style_label_down, color = c_markerShort, textcolor = c_markerTxt, size = size.small)
+    label.new(bar_index, na, "BEAR", yloc = yloc.abovebar, style = label.style_label_down, color = c_markerShort, textcolor = c_markerTxt, size = size.small, force_overlay = true)
+color _candleBody   = finalWvad > signalLine ? c_candBullBody : finalWvad < signalLine ? c_candBearBody : c_candNeutBody
+color _candleBorder = finalWvad > signalLine ? c_candBullBrd  : finalWvad < signalLine ? c_candBearBrd  : c_candNeutBrd
+plotcandle(i_showCandles ? open : na, i_showCandles ? high : na, i_showCandles ? low : na, i_showCandles ? close : na,
+ title         = "Heatmap Candles",
+ color         = _candleBody,
+ wickcolor     = _candleBorder,
+ bordercolor   = _candleBorder,
+ force_overlay = true)
+
+if _drawLevels
+    f_deleteLevels()
+    int _x2 = bar_index + 10
+    slLine    := line.new(bar_index, slPrice,    _x2, slPrice,    color = c_slLevel,    style = line.style_solid,  width = 2, force_overlay = true)
+    entryLine := line.new(bar_index, entryPrice, _x2, entryPrice, color = c_entryLevel, style = line.style_dashed, width = 1, force_overlay = true)
+    tp1Line   := line.new(bar_index, tp1Price,   _x2, tp1Price,   color = c_tp1Level,   style = line.style_dashed, width = 1, force_overlay = true)
+    tp2Line   := line.new(bar_index, tp2Price,   _x2, tp2Price,   color = c_tp2Level,   style = line.style_dashed, width = 1, force_overlay = true)
+    tp3Line   := line.new(bar_index, tp3Price,   _x2, tp3Price,   color = c_tp3Level,   style = line.style_dashed, width = 1, force_overlay = true)
+    slLbl    := label.new(_x2, slPrice,    "✕ SL "    + str.tostring(slPrice,    format.mintick), style = label.style_label_left, color = c_slLevel,    textcolor = c_lvlTxt, size = size.small, force_overlay = true)
+    entryLbl := label.new(_x2, entryPrice, "▶ Entry " + str.tostring(entryPrice, format.mintick), style = label.style_label_left, color = c_entryLevel, textcolor = c_lvlTxt, size = size.small, force_overlay = true)
+    tp1Lbl   := label.new(_x2, tp1Price,   "◆ TP1 "   + str.tostring(tp1Price,   format.mintick), style = label.style_label_left, color = c_tp1Level,   textcolor = c_lvlTxt, size = size.small, force_overlay = true)
+    tp2Lbl   := label.new(_x2, tp2Price,   "✦ TP2 "   + str.tostring(tp2Price,   format.mintick), style = label.style_label_left, color = c_tp2Level,   textcolor = c_lvlTxt, size = size.small, force_overlay = true)
+    tp3Lbl   := label.new(_x2, tp3Price,   "◆ TP3 "   + str.tostring(tp3Price,   format.mintick), style = label.style_label_left, color = c_tp3Level,   textcolor = c_lvlTxt, size = size.small, force_overlay = true)
+    riskFill   := linefill.new(slLine, entryLine, c_riskFill)
+    rewardFill := linefill.new(entryLine, tp3Line, c_rewardFill)
+
+if _tp1Fire
+    tp1Hit := true
+    label.set_text(tp1Lbl, "TP1 ✓ HIT " + f_pctTxt(tp1Price, entryPrice, isLong))
+if _tp2Fire
+    tp2Hit := true
+    label.set_text(tp2Lbl, "TP2 ✓ HIT " + f_pctTxt(tp2Price, entryPrice, isLong))
+if _tp3Fire
+    tp3Hit := true
+    label.set_text(tp3Lbl, "TP3 ✓ HIT " + f_pctTxt(tp3Price, entryPrice, isLong))
+if _slFire
+    slHit := true
+    label.set_text(slLbl, "SL ✓ HIT " + f_pctTxt(slPrice, entryPrice, isLong))
+
+bool _tradeClosed = slHit or tp3Hit
+if not na(slLine) and _tradeClosed and na(_closeBar)
+    _closeBar := bar_index
+
+bool _extUpdate = _tradeClosed ? _closeBar == bar_index : barstate.islast
+if not na(slLine) and _extUpdate
+    int _extX = _tradeClosed ? _closeBar + 10 : last_bar_index + 10
+    line.set_x2(slLine,    _extX)
+    line.set_x2(entryLine, _extX)
+    line.set_x2(tp1Line,   _extX)
+    line.set_x2(tp2Line,   _extX)
+    line.set_x2(tp3Line,   _extX)
+    label.set_x(slLbl,     _extX)
+    label.set_x(entryLbl,  _extX)
+    label.set_x(tp1Lbl,    _extX)
+    label.set_x(tp2Lbl,    _extX)
+    label.set_x(tp3Lbl,    _extX)
+
+// ── DASHBOARD ─────────────────────────────────────────────
+var string tablePosition = i_dashPos == "Top Right" ? position.top_right : i_dashPos == "Top Left" ? position.top_left : i_dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+var table dash = table.new(tablePosition, 2, 18, bgcolor = na, border_width = 1, border_color = color.new(#2a3040, 40), frame_width = 1, frame_color = color.new(#3a2a6d, 40), force_overlay = true)
+
+color row_a = C_DASH_BG
+color row_b = color.new(C_DASH_BG, 40)
+color lbl_col = color.new(C_DASH_TXT, 25)
+
+string biasStr = finalWvad > signalLine ? "BULLISH  " : finalWvad < signalLine ? "BEARISH  " : "NEUTRAL  "
+color biasColor = finalWvad > signalLine ? C_SUP : finalWvad < signalLine ? C_RES : C_DASH_TXT
+color wvadColor = finalWvad >= 0 ? C_SUP : C_RES
+color histColorTxt = histWvad >= 0 ? C_SUP : C_RES
+string htfBiasStr = not i_useHtf ? "OFF  " : htfBullish ? "BULL  " : htfBearish ? "BEAR  " : "FLAT  "
+color htfColor = not i_useHtf ? C_DASH_TXT : htfBullish ? C_SUP : htfBearish ? C_RES : C_DASH_TXT
+color adxColor = _adxPass ? C_SUP : C_RES
+string lockStr  = i_lockSignal ? "ACTIVE  " : "OFF  "
+color  lockCol  = i_lockSignal ? C_RES : C_DASH_TXT
+string tradeStr = na(entryPrice) ? "—  " : isLong ? "LONG  " : "SHORT  "
+color  tradeCol = na(entryPrice) ? C_DASH_TXT : isLong ? C_SUP : C_RES
+string entryStr = na(entryPrice) ? "—  " : str.tostring(entryPrice, format.mintick) + "  "
+string slStr    = na(slPrice)  ? "—  " : str.tostring(slPrice,  format.mintick) + "  "
+string tp1Str   = na(tp1Price) ? "—  " : str.tostring(tp1Price, format.mintick) + "  "
+string tp2Str   = na(tp2Price) ? "—  " : str.tostring(tp2Price, format.mintick) + "  "
+string tp3Str   = na(tp3Price) ? "—  " : str.tostring(tp3Price, format.mintick) + "  "
+color  slCol    = slHit  ? C_RES : C_DASH_TXT
+color  tp1Col   = tp1Hit ? C_SUP : C_DASH_TXT
+color  tp2Col   = tp2Hit ? C_SUP : C_DASH_TXT
+color  tp3Col   = tp3Hit ? C_SUP : C_DASH_TXT
+
+if i_showDash
+    table.cell(dash, 0, 0, "WVADP", text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_left, bgcolor = C_DASH_HDR)
+    table.cell(dash, 1, 0, syminfo.ticker + "  ·  " + f_tf(), text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_right, bgcolor = C_DASH_HDR)
+
+    table.cell(dash, 0, 1, "  Lock", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_a)
+    table.cell(dash, 1, 1, lockStr, text_color = lockCol, text_size = size.small, text_halign = text.align_right, bgcolor = row_a)
+
+    table.cell(dash, 0, 2, "  Bias", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_b)
+    table.cell(dash, 1, 2, biasStr, text_color = biasColor, text_size = size.small, text_halign = text.align_right, bgcolor = row_b)
+
+    table.cell(dash, 0, 3, "  WVAD", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_a)
+    table.cell(dash, 1, 3, str.tostring(finalWvad, "#.##") + "  ", text_color = wvadColor, text_size = size.small, text_halign = text.align_right, bgcolor = row_a)
+
+    table.cell(dash, 0, 4, "  Signal", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_b)
+    table.cell(dash, 1, 4, str.tostring(signalLine, "#.##") + "  ", text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_right, bgcolor = row_b)
+
+    table.cell(dash, 0, 5, "  Histogram", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_a)
+    table.cell(dash, 1, 5, str.tostring(histWvad, "#.##") + "  ", text_color = histColorTxt, text_size = size.small, text_halign = text.align_right, bgcolor = row_a)
+
+    table.cell(dash, 0, 6, "  Strength", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_b)
+    table.cell(dash, 1, 6, f_bar(strengthRaw, 1.0) + "  ", text_color = f_barColor(strengthRaw), text_size = size.small, text_halign = text.align_right, bgcolor = row_b)
+
+    table.cell(dash, 0, 7, "  Volume", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_a)
+    table.cell(dash, 1, 7, f_num(volume) + "  ", text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_right, bgcolor = row_a)
+
+    table.cell(dash, 0, 8, "  Vol Ratio", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = row_b)
+    table.cell(dash, 1, 8, f_bar(volRatio, 2.0) + "  ", text_color = f_barColor(volPct), text_size = size.small, text_halign = text.align_right, bgcolor = row_b)
+
+    int _row = 9
+
+    if i_useHtf
+        color _rowBg = _row % 2 == 1 ? row_a : row_b
+        table.cell(dash, 0, _row, "  HTF Bias", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBg)
+        table.cell(dash, 1, _row, htfBiasStr, text_color = htfColor, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBg)
+        _row += 1
+
+    if i_useAdxFilter
+        color _rowBg = _row % 2 == 1 ? row_a : row_b
+        table.cell(dash, 0, _row, "  ADX", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBg)
+        table.cell(dash, 1, _row, str.tostring(_adxVal, "#.##") + "  ", text_color = adxColor, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBg)
+        _row += 1
+
+    if i_adaptFilterType != "None"
+        color _rowBg = _row % 2 == 1 ? row_a : row_b
+        table.cell(dash, 0, _row, "  Adapt Filter", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBg)
+        table.cell(dash, 1, _row, i_adaptFilterType + "  ", text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBg)
+        _row += 1
+
+    color _rowBgTrade = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  Trade", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgTrade)
+    table.cell(dash, 1, _row, tradeStr, text_color = tradeCol, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgTrade)
+    _row += 1
+
+    color _rowBgEntry = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  Entry", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgEntry)
+    table.cell(dash, 1, _row, entryStr, text_color = C_DASH_TXT, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgEntry)
+    _row += 1
+
+    color _rowBgSl = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  SL", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgSl)
+    table.cell(dash, 1, _row, slStr, text_color = slCol, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgSl)
+    _row += 1
+
+    color _rowBgTp1 = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  TP1", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgTp1)
+    table.cell(dash, 1, _row, tp1Str, text_color = tp1Col, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgTp1)
+    _row += 1
+
+    color _rowBgTp2 = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  TP2", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgTp2)
+    table.cell(dash, 1, _row, tp2Str, text_color = tp2Col, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgTp2)
+    _row += 1
+
+    color _rowBgTp3 = _row % 2 == 1 ? row_a : row_b
+    table.cell(dash, 0, _row, "  TP3", text_color = lbl_col, text_size = size.small, text_halign = text.align_left, bgcolor = _rowBgTp3)
+    table.cell(dash, 1, _row, tp3Str, text_color = tp3Col, text_size = size.small, text_halign = text.align_right, bgcolor = _rowBgTp3)
+    _row += 1
+
+
+// === Dashboard with Telegram Link ===
+var table myTable = table.new(position.top_center, 1, 1, border_width=1, frame_color=color.black, bgcolor=color.white)
+
+// Add Telegram Message to Dashboard
+table.cell(myTable, 0, 0, "Join Telegram @jonavyfxtrade", bgcolor=color.blue, text_color=color.white, text_size=size.normal)
+
