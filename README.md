@@ -23,7 +23,8 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_News_Straddle_ReverseTrailing_EA.mq5
 │   ├── Zerith_Oneshot.mq5
 │   ├── Zerith_SBR_Liquidity_Sweep_EA.mq5
-│   └── Zerith_Supertrend_MultiStrategy_EA.mq5
+│   ├── Zerith_Supertrend_MultiStrategy_EA.mq5
+│   └── Zerith_XAU_Scalping_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
 │   ├── Zerith_Supertrend_DeMarker_Signal.pine
 │   └── Zerith_Supertrend_StochRSI_Signal.pine
@@ -65,6 +66,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 | [`Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5`](Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5) | Mean Reversion Grid / XAUUSD | Adaptive Statistical Mean Reversion on Gold |
 | [`Experts/Zerith_MACD_Martingale_Grid_EA.mq5`](Experts/Zerith_MACD_Martingale_Grid_EA.mq5) | Trend Momentum Grid / Multi-Asset | MACD Zero-Cross Trend Following Grid |
 | [`Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5`](Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | H4 Multi-Timeframe Ichimoku Kinko Hyo Cloud Breakout |
+| [`Experts/Zerith_XAU_Scalping_EA.mq5`](Experts/Zerith_XAU_Scalping_EA.mq5) | Decision Matrix & Adaptive Recovery / XAUUSD | Multi-Regime Scalping (Pullback, Mean-Rev, Breakout) with Adaptive Multi-Layer Recovery, Deep Anti-Martingale & Basket Trailing |
 | [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | Webhook / Telegram Signal Execution Engine |
 
 ### Indicators (TradingView / Pine Script)
@@ -147,6 +149,49 @@ flowchart TD
    - **Take Profit:** Configured with positive mathematical expectancy ($1:2.5$ or $1:3.0$ R:R).
    - **Breakeven Engine:** Automatically locks Stop Loss to entry $+ \text{buffer}$ once the position hits $1:1$ R:R.
    - **Prop-Firm Guards:** Max Daily Loss % and Max Floating Drawdown % equity limits.
+
+---
+
+## 🪙 Zerith XAU Scalping EA (Decision Matrix & Adaptive Multi-Layer Recovery)
+
+A multi-regime algorithmic scalper engineered specifically for **XAUUSD (Gold)** on MetaTrader 5, combining a multi-timeframe Decision Matrix, an adaptive self-weighting strategy scoring engine, and an anti-martingale deep recovery grid.
+
+```mermaid
+flowchart TD
+    A[Multi-TF Ingestion: M1, M5, M15, H1, H4\nZero Indicator Handles Caching] --> B[Market Regime Engine\nVOLATILE | CHOPPY | TREND_STRONG | RANGE | NORMAL]
+    B --> C{Choppy Filter\nM15 vs H1 Trend Conflict?}
+    C -- Yes --> Z[HALT / Wait Next Bar]
+    C -- No --> D[Signal Generator\nPullback | Mean-Reversion | Breakout]
+    D --> E[Adaptive AI Weighting\nRolling 30-Trade Win Rate Score]
+    E --> F{Confidence >= 60% & Spread OK?}
+    F -- No --> Z
+    F -- Yes --> G[Single-Basket Entry: M1 Execution]
+    G --> H{Adverse Price Move?}
+    H -- No --> I[Unified Basket ATR TP / Trailing Stop]
+    H -- Yes --> J[Adaptive Multi-Layer Recovery\nDynamic Gap + S/R Level Snapping]
+    J --> K[Deep Anti-Martingale Lot Sizing\nEarly 1.3x -> Mid 1.5x -> Deep >=6: 0.8x]
+    K --> L[Staged Partial Close / Breakeven Escape]
+```
+
+### Core Strategy Mechanics:
+1. **Market Regime Engine (Decision Matrix)**:
+   - Evaluates volatility (M1/M5 ATR ratio), directional momentum (H1/M15 ADX), and multi-timeframe trend alignment.
+   - Automatically switches between **Pullback** in strong trends, **Mean Reversion** in range/normal conditions, and **Breakout** in volatility spikes. Halts trading entirely during **Choppy** conflicting conditions.
+2. **Adaptive AI Performance Weighting**:
+   - Maintains rolling circular performance buffers (last 30 trades per strategy).
+   - Dynamically scales confidence scores via exponential smoothing: $\text{Score} = 0.7 \times \text{Score}_{\text{prev}} + 0.3 \times \text{WinRate}_{30}$.
+3. **Smart Multi-Layer Recovery & Deep Anti-Martingale**:
+   - **Dynamic Spacing:** Recovery gap adapts to ATR volatility and snaps to key H1 Support/Resistance levels.
+   - **Momentum & HTF Guards:** Rejects counter-trend recovery entries if lower-timeframe momentum is in freefall or higher-timeframe trends (H1+H4) are strongly opposing.
+   - **Anti-Martingale Deep Lots:** Unlike toxic exponential martingales, lot sizes step up moderately ($1.3\times \rightarrow 1.5\times$) then **decrease to $0.8\times$** at deep layers ($\ge 6$) to prevent margin exhaustion.
+4. **Comprehensive Exit & Capital Protection Suite**:
+   - **Unified Basket TP & Trailing Stop:** Dynamic ATR-scaled profit targets with USD-based trailing stops ($5 trigger / $2 trail).
+   - **Staged Partial Close:** Takes partial profits ($30\%$) off winning layers when in recovery to de-risk floating exposure.
+   - **Breakeven Escape:** Automatically exits at breakeven ($\ge \$0.00$) if the basket recovers from significant adverse excursion ($< -\$3.00$).
+   - **Basket Time-Stop & Stop-Loss:** Enforces strict 8-hour maximum basket holding time and hard USD stop loss.
+5. **v17.00 Architecture & State Persistence**:
+   - **Basket-Level Win Rate & Profit Factor:** True basket-level trade tracking resolving asynchronous MT5 deal history latency.
+   - **Full GlobalVariable State Persistence:** Seamless recovery across terminal reboots and connection drops.
 
 ---
 
