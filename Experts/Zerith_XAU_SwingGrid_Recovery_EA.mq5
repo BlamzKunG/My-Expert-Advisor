@@ -91,7 +91,7 @@ input double   InpTrailingTriggerUsd  = 5.0;          // Trailing Activation Bas
 input double   InpTrailingStepUsd     = 2.0;          // Trailing Callback / Step ($)
 
 input group ">>>> 7. Zerith XAU Scalping: Staged Partial Close"
-input bool     InpPartialCloseEnable  = true;         // Enable Staged Partial Close
+input bool     InpPartialCloseEnable  = false;        // Enable Staged Partial Close (Default: false for pure basket closing)
 input double   InpPartialCloseAtUsd   = 4.0;          // Profit Trigger per Stage ($)
 input double   InpPartialClosePct     = 30.0;         // Percentage of Winning Volume to Close (%)
 input bool     InpStagedPartialClose  = true;         // Enable Multi-Stage Partial Close
@@ -1091,43 +1091,12 @@ double BasketTargetPrice(int direction)
    double raw_target = (direction==0)
                        ? avg + tp_pts * g_point * g_pointFactor
                        : avg - tp_pts * g_point * g_pointFactor;
-   if(InpRecoveryModeEnable && g_recoveryMode[direction])
-   {
-      double bid = g_sym.Bid();
-      double ask = g_sym.Ask();
-      double min_dist = (g_stopsLevel + 2) * g_point * g_pointFactor;
-      if(direction==0 && raw_target < bid + min_dist)
-         raw_target = NormPrice(bid + min_dist);
-      if(direction==1 && raw_target > ask - min_dist)
-         raw_target = NormPrice(ask - min_dist);
-   }
    return NormPrice(raw_target);
 }
 
 double GetBasketFinalTarget(int direction)
 {
-   int n = BasketCount(direction);
-   if(n == 0) return 0.0;
-   double target = NormPrice(BasketTargetPrice(direction));
-   if(target <= 0.0) return 0.0;
-   if(n <= 1) return target;
-
-   double avg     = BasketAvgPrice(direction);
-   double bpnl    = BasketProfit(direction);
-   double tp_dist = MathAbs(target - avg);
-
-   if(bpnl > 0.0 && tp_dist > 0.0)
-   {
-      double cur_price = (direction==0) ? g_sym.Bid() : g_sym.Ask();
-      double progress  = (direction==0) ? (cur_price - avg) : (avg - cur_price);
-      if(progress > tp_dist * 0.50)
-      {
-         double lock_px = tp_dist * 0.60;
-         double buffer_px = InpBreakevenBufferPts * g_point * g_pointFactor;
-         return NormPrice((direction==0) ? avg + lock_px + buffer_px : avg - lock_px - buffer_px);
-      }
-   }
-   return target;
+   return BasketTargetPrice(direction);
 }
 
 //=====================================================================
@@ -1234,21 +1203,18 @@ void ManageBasketRisk(int direction)
 
    double basket_pl = BasketProfit(direction);
 
-   // [BASKET TAKE-PROFIT EXIT (ปิดรวบ) FOR n >= 2]
-   if(n >= 2)
+   // [BASKET TAKE-PROFIT EXIT (ปิดรวบแบบปกติ)]
+   double target = NormPrice(BasketTargetPrice(direction));
+   if(target > 0.0)
    {
-      double final_target = GetBasketFinalTarget(direction);
-      if(final_target > 0.0)
+      double cur_px = (direction==0) ? g_sym.Bid() : g_sym.Ask();
+      bool reached  = (direction==0) ? (cur_px >= target) : (cur_px <= target);
+      if(reached && (basket_pl >= 0.0 || n >= 2))
       {
-         double cur_px = (direction==0) ? g_sym.Bid() : g_sym.Ask();
-         bool reached  = (direction==0) ? (cur_px >= final_target) : (cur_px <= final_target);
-         if(reached && basket_pl >= 0.0)
-         {
-            PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f BasketPL=$%.2f — Closing all layers (ปิดรวบ)",
-                     direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, final_target, basket_pl));
-            CloseBasket(direction, StringFormat("Basket TP reached pl=%.2f", basket_pl));
-            return;
-         }
+         PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f BasketPL=$%.2f — ปิดรวบทุกไม้",
+                  direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, target, basket_pl));
+         CloseBasket(direction, StringFormat("Basket TP reached: Px=%.*f Target=%.*f pl=%.2f", g_digits, cur_px, g_digits, target, basket_pl));
+         return;
       }
    }
 
@@ -1546,24 +1512,26 @@ void UpdateBasketTPs()
       int n = g_bStats[direction].count;
       if(n == 0) continue;
 
-      double final_target = GetBasketFinalTarget(direction);
-      if(final_target <= 0.0) continue;
+      double target = NormPrice(BasketTargetPrice(direction));
+      if(target <= 0.0) continue;
 
+      double cur_px    = (direction==0) ? g_sym.Bid() : g_sym.Ask();
+      double basket_pl = BasketProfit(direction);
+      bool reached     = (direction==0) ? (cur_px >= target) : (cur_px <= target);
+
+      // 1. Check if price reached target (ปิดรวบทั้งตระกร้า)
+      if(reached && (basket_pl >= 0.0 || n >= 2))
+      {
+         PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f BasketPL=$%.2f — ปิดรวบทุกไม้",
+                  direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, target, basket_pl));
+         CloseBasket(direction, StringFormat("Basket TP reached: Px=%.*f Target=%.*f pl=%.2f", g_digits, cur_px, g_digits, target, basket_pl));
+         continue;
+      }
+
+      // 2. When n >= 2, clear broker-side TP on all individual positions
+      // so the broker cannot close any single order alone!
       if(n >= 2)
       {
-         // 1. Check if price already reached target with positive profit (instant basket close)
-         double cur_px = (direction==0) ? g_sym.Bid() : g_sym.Ask();
-         double bpnl   = BasketProfit(direction);
-         bool reached  = (direction==0) ? (cur_px >= final_target) : (cur_px <= final_target);
-         if(reached && bpnl >= 0.0)
-         {
-            PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f Profit=$%.2f — Closing all layers (ปิดรวบ)",
-                     direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, final_target, bpnl));
-            CloseBasket(direction, StringFormat("Basket TP reached pl=%.2f", bpnl));
-            continue;
-         }
-
-         // 2. Clear broker-side TP on all individual positions so the broker cannot close orders separately!
          for(int i=0; i<PositionsTotal(); i++)
          {
             if(!g_pos.SelectByIndex(i)) continue;
@@ -1575,7 +1543,7 @@ void UpdateBasketTPs()
             }
          }
       }
-      else // Single position (n == 1): Maintain broker-side TP on the individual position
+      else // Single position (n == 1): Maintain broker-side TP
       {
          for(int i=0; i<PositionsTotal(); i++)
          {
@@ -1585,9 +1553,9 @@ void UpdateBasketTPs()
             double cur_tp = g_pos.TakeProfit();
             datetime posTime = (datetime)g_pos.Time();
             bool justOpened = (TimeCurrent() - posTime < 3);
-            bool should_update = (MathAbs(final_target - cur_tp) > 2.0 * one_pt) || (cur_tp == 0.0 && final_target > one_pt);
+            bool should_update = (MathAbs(target - cur_tp) > 2.0 * one_pt) || (cur_tp == 0.0 && target > one_pt);
             if(should_update && !justOpened)
-               g_trade.PositionModify(g_pos.Ticket(), g_pos.StopLoss(), final_target);
+               g_trade.PositionModify(g_pos.Ticket(), g_pos.StopLoss(), target);
          }
       }
    }
