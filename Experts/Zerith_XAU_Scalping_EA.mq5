@@ -141,6 +141,31 @@ input color    InpDashBorderColor     = C'52,152,219';// Dashboard Border Color
 //=====================================================================
 // GLOBALS
 //=====================================================================
+// Tester & Optimization environment flags
+bool     g_isTester       = false;
+bool     g_isOptimization = false;
+bool     g_isVisual       = false;
+
+// Cached symbol trading properties
+double   g_volStep        = 0.01;
+double   g_volMin         = 0.01;
+double   g_volMax         = 100.0;
+int      g_stopsLevel     = 0;
+
+// Single-Pass Basket Cache (O(1) lookups instead of looping PositionsTotal())
+struct SBasketCache
+{
+   int      count;
+   double   lots;
+   double   avg_price;
+   double   last_price;
+   datetime last_time;
+   ulong    last_ticket;
+   double   last_lot;
+   double   profit;
+   datetime oldest_time;
+};
+SBasketCache g_bStats[2]; // 0: BUY, 1: SELL
 CTrade         g_trade;
 CPositionInfo  g_pos;
 CSymbolInfo    g_sym;
@@ -251,6 +276,8 @@ void   CalcADX(const double &high[], const double &low[], const double &close[],
 double CalcBBWidth(const double &close[], int count, int period);
 void   CalcMACDArr(const double &close[], double &out[], int count, int fast=12, int slow=26, int signal_p=9);
 bool   AnalyzeTF(ENUM_TIMEFRAMES tf, const string tf_name, int n_bars, TFView &v);
+void   UpdateBasketCache();
+bool   ShouldUpdateDashboard();
 void   UpdateSRRanges(); 
 string EvaluateMarketRegime(const TFView &m1, const TFView &m5, const TFView &m15, const TFView &h1); 
 void   DecideSignal(TFView &views[], bool &viewsOk[], Signal &out); 
@@ -324,6 +351,19 @@ int OnInit()
 
    g_gvPrefix = StringFormat("ZXAU17_%I64d_%s_", InpMagic, Symbol());
 
+   g_isTester       = (bool)MQLInfoInteger(MQL_TESTER);
+   g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   g_isVisual       = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
+
+   g_volStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   g_volMin  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   g_volMax  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   if(g_volStep <= 0) g_volStep = 0.01;
+   if(g_volMin  <= 0) g_volMin  = 0.01;
+   if(g_volMax  <= 0) g_volMax  = 100.0;
+
+   g_stopsLevel = (int)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+
    if(InpTrailingEnable && InpTrailingStepUsd >= InpTrailingTriggerUsd)
       PrintFmt("WARN: TrailingStep >= TrailingTrigger.");
    if(InpPartialCloseEnable && InpPartialClosePct <= 0)
@@ -370,7 +410,7 @@ int OnInit()
    PrintFmt(StringFormat("Zerith XAU Scalping v17.00 EXPERT | %s digits=%d point=%.5f factor=%.0f",
             Symbol(), g_digits, g_point, g_pointFactor));
    
-   if(InpShowDashboard)
+   if(ShouldUpdateDashboard())
    {
       RefreshDashColors();
       DashInit();
@@ -383,7 +423,7 @@ int OnInit()
 //=====================================================================
 void OnDeinit(const int reason)
 {
-   SaveState();
+   if(!g_isTester) SaveState();
    DashDelete();
 }
 
@@ -394,6 +434,7 @@ void OnTick()
 {
    g_sym.RefreshRates();
    CheckDayRollover();
+   UpdateBasketCache();
 
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -409,7 +450,26 @@ void OnTick()
    string  tfNames[5]     = {"M1","M5","M15","H1","H4"};
    int     tfBars[5]      = {InpBarsM1, InpBarsHTF, InpBarsHTF, InpBarsHTF, InpBarsHTF};
 
-   viewsOk[0] = AnalyzeTF(tfs[0], tfNames[0], tfBars[0], views[0]);
+   static double   s_lastM1Price = 0.0;
+   static datetime s_lastM1Bar   = 0;
+   static TFView   s_cachedM1View;
+   static bool     s_cachedM1Ok  = false;
+
+   datetime curM1Bar = iTime(Symbol(), PERIOD_M1, 0);
+   double curBid = g_sym.Bid();
+   if(curM1Bar == s_lastM1Bar && curBid == s_lastM1Price && s_cachedM1Ok)
+   {
+      views[0]   = s_cachedM1View;
+      viewsOk[0] = s_cachedM1Ok;
+   }
+   else
+   {
+      viewsOk[0] = AnalyzeTF(tfs[0], tfNames[0], tfBars[0], views[0]);
+      s_cachedM1View = views[0];
+      s_cachedM1Ok   = viewsOk[0];
+      s_lastM1Bar    = curM1Bar;
+      s_lastM1Price  = curBid;
+   }
 
    datetime curM5Bar  = iTime(Symbol(), PERIOD_M5, 0);  if(curM5Bar == 0)  curM5Bar  = TimeCurrent();
    datetime curM15Bar = iTime(Symbol(), PERIOD_M15, 0); if(curM15Bar == 0) curM15Bar = TimeCurrent();
@@ -454,7 +514,7 @@ void OnTick()
    {
       if(PositionsTotal() > 0)
          CloseAllPositions("HALT: equity DD limit");
-      if(InpShowDashboard) DashUpdate(bal, eq, fm, views, viewsOk);
+      if(ShouldUpdateDashboard()) DashUpdate(bal, eq, fm, views, viewsOk);
       return;
    }
 
@@ -483,10 +543,13 @@ void OnTick()
 
    UpdateBasketTPs();
 
-   if(InpShowDashboard) DashUpdate(bal, eq, fm, views, viewsOk);
+   if(ShouldUpdateDashboard()) DashUpdate(bal, eq, fm, views, viewsOk);
 
-   g_saveCounter++;
-   if(g_saveCounter >= 60) { SaveState(); g_saveCounter = 0; }
+   if(!g_isTester)
+   {
+      g_saveCounter++;
+      if(g_saveCounter >= 60) { SaveState(); g_saveCounter = 0; }
+   }
 }
 
 //=====================================================================
@@ -494,7 +557,7 @@ void OnTick()
 //=====================================================================
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
-   if(id == CHARTEVENT_CHART_CHANGE && InpShowDashboard && InpDashAutoColor)
+   if(id == CHARTEVENT_CHART_CHANGE && ShouldUpdateDashboard() && InpDashAutoColor)
    {
       RefreshDashColors();
       ChartRedraw();
@@ -717,7 +780,7 @@ double CalcBBWidth(const double &close[], int count, int period)
 
 void CalcMACDArr(const double &close[], double &out[], int count, int fast=12, int slow=26, int signal_p=9)
 {
-   ArrayResize(out, count);
+   if(ArraySize(out) < count) ArrayResize(out, count);
    if(count < slow+signal_p+2) { ArrayInitialize(out, 0.0); return; }
    double af=2.0/(fast+1.0), as_=2.0/(slow+1.0), ag=2.0/(signal_p+1.0);
    double ef=close[0], es=close[0], ml=0.0, sig=0.0;
@@ -735,7 +798,7 @@ void CalcMACDArr(const double &close[], double &out[], int count, int fast=12, i
 bool AnalyzeTF(ENUM_TIMEFRAMES tf, const string tf_name, int n_bars, TFView &v)
 {
    if(n_bars < 80) n_bars = 80;
-   double close_arr[], high_arr[], low_arr[];
+   static double close_arr[], high_arr[], low_arr[];
    ArraySetAsSeries(close_arr, false);
    ArraySetAsSeries(high_arr,  false);
    ArraySetAsSeries(low_arr,   false);
@@ -744,8 +807,9 @@ bool AnalyzeTF(ENUM_TIMEFRAMES tf, const string tf_name, int n_bars, TFView &v)
    if(CopyHigh(Symbol(),tf,0,n_bars,high_arr) < 80) return false;
    if(CopyLow (Symbol(),tf,0,n_bars,low_arr ) < 80) return false;
    int cnt = ArraySize(close_arr);
-   double ema_f[], ema_s[];
-   ArrayResize(ema_f,cnt); ArrayResize(ema_s,cnt);
+   static double ema_f[], ema_s[];
+   if(ArraySize(ema_f) < cnt) ArrayResize(ema_f, cnt);
+   if(ArraySize(ema_s) < cnt) ArrayResize(ema_s, cnt);
    CalcEMA(close_arr,ema_f,20,cnt);
    CalcEMA(close_arr,ema_s,50,cnt);
    double lc=close_arr[cnt-1], ef=ema_f[cnt-1], es=ema_s[cnt-1];
@@ -754,7 +818,7 @@ bool AnalyzeTF(ENUM_TIMEFRAMES tf, const string tf_name, int n_bars, TFView &v)
    double adx_v,pdi_v,mdi_v;
    CalcADX(high_arr,low_arr,close_arr,cnt,14,adx_v,pdi_v,mdi_v);
 
-   double macd_arr[];
+   static double macd_arr[];
    CalcMACDArr(close_arr, macd_arr, cnt, 12, 26, 9);
 
    v.tf_name      = tf_name;
@@ -776,7 +840,11 @@ bool AnalyzeTF(ENUM_TIMEFRAMES tf, const string tf_name, int n_bars, TFView &v)
 //=====================================================================
 void UpdateSRRanges()
 {
-   double high_arr[], low_arr[];
+   static datetime lastSrH1Bar = 0;
+   datetime curH1Bar = iTime(Symbol(), PERIOD_H1, 0);
+   if(curH1Bar == lastSrH1Bar && g_resistPx > 0.0 && g_supportPx > 0.0) return;
+
+   static double high_arr[], low_arr[];
    ArraySetAsSeries(high_arr, true);
    ArraySetAsSeries(low_arr, true);
    if(CopyHigh(Symbol(), PERIOD_H1, 1, 100, high_arr) < 100) return;
@@ -789,6 +857,7 @@ void UpdateSRRanges()
    }
    g_resistPx = maxHigh;
    g_supportPx = minLow;
+   lastSrH1Bar = curH1Bar;
 }
 
 //=====================================================================
@@ -912,10 +981,11 @@ bool AllowedHour()
 //=====================================================================
 double CurrentSpreadPts()
 {
-   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   if(g_point <= 0.0 || g_pointFactor <= 0.0) return 0.0;
-   return (ask - bid) / (g_point * g_pointFactor);
+   double ask = g_sym.Ask();
+   double bid = g_sym.Bid();
+   double one_pt = g_point * g_pointFactor;
+   if(one_pt <= 0.0) return 0.0;
+   return (ask - bid) / one_pt;
 }
 
 bool SpreadAcceptable()
@@ -924,79 +994,70 @@ bool SpreadAcceptable()
 }
 
 //=====================================================================
-// BASKET HELPERS
+// BASKET CACHE & HELPERS (O(1) Ultra-Fast Lookups)
 //=====================================================================
-int BasketCount(int direction)
+void UpdateBasketCache()
 {
-   int cnt=0;
-   for(int i=0;i<PositionsTotal();i++)
-   {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)==direction) cnt++;
-   }
-   return cnt;
-}
+   g_bStats[0].count = 0; g_bStats[0].lots = 0.0; g_bStats[0].profit = 0.0;
+   g_bStats[0].last_price = 0.0; g_bStats[0].last_time = 0; g_bStats[0].last_ticket = 0;
+   g_bStats[0].last_lot = InpInitialLot; g_bStats[0].oldest_time = 0;
+   double buyWeightSum = 0.0;
 
-double BasketAvgPrice(int direction)
-{
-   double sv=0,sw=0;
-   for(int i=0;i<PositionsTotal();i++)
-   {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
-      sw+=g_pos.PriceOpen()*g_pos.Volume(); sv+=g_pos.Volume();
-   }
-   return (sv>0)?sw/sv:0.0;
-}
+   g_bStats[1].count = 0; g_bStats[1].lots = 0.0; g_bStats[1].profit = 0.0;
+   g_bStats[1].last_price = 0.0; g_bStats[1].last_time = 0; g_bStats[1].last_ticket = 0;
+   g_bStats[1].last_lot = InpInitialLot; g_bStats[1].oldest_time = 0;
+   double sellWeightSum = 0.0;
 
-double BasketLastOpenPrice(int direction)
-{
-   double lastPx=0.0; datetime lastTs=0; ulong lastTicket=0;
-   for(int i=0;i<PositionsTotal();i++)
+   int total = PositionsTotal();
+   if(total == 0)
    {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
-      datetime posTime   = (datetime)g_pos.Time();
-      ulong    posTicket = g_pos.Ticket();
-      if(posTime > lastTs || (posTime==lastTs && posTicket>lastTicket))
-      { lastTs=posTime; lastTicket=posTicket; lastPx=g_pos.PriceOpen(); }
+      g_bStats[0].avg_price = 0.0;
+      g_bStats[1].avg_price = 0.0;
+      return;
    }
-   return lastPx;
-}
 
-double BasketProfit(int direction)
-{
-   double total=0.0;
-   for(int i=0;i<PositionsTotal();i++)
+   for(int i = 0; i < total; i++)
    {
       if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)==direction) total+=g_pos.Profit()+g_pos.Swap();
-   }
-   return total;
-}
+      if(g_pos.Symbol() != Symbol() || g_pos.Magic() != (ulong)InpMagic) continue;
 
-datetime BasketOldestTime(int direction)
-{
-   datetime oldest = 0;
-   for(int i=0;i<PositionsTotal();i++)
-   {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
+      int d = (g_pos.PositionType() == POSITION_TYPE_BUY) ? 0 : 1;
+      double vol = g_pos.Volume();
+      double px  = g_pos.PriceOpen();
       datetime pt = (datetime)g_pos.Time();
-      if(oldest == 0 || pt < oldest) oldest = pt;
+      ulong ticket = g_pos.Ticket();
+
+      g_bStats[d].count++;
+      g_bStats[d].lots += vol;
+      g_bStats[d].profit += g_pos.Profit() + g_pos.Swap();
+      if(d == 0) buyWeightSum += px * vol;
+      else       sellWeightSum += px * vol;
+
+      if(g_bStats[d].oldest_time == 0 || pt < g_bStats[d].oldest_time)
+         g_bStats[d].oldest_time = pt;
+
+      if(pt > g_bStats[d].last_time || (pt == g_bStats[d].last_time && ticket > g_bStats[d].last_ticket))
+      {
+         g_bStats[d].last_time   = pt;
+         g_bStats[d].last_ticket = ticket;
+         g_bStats[d].last_price  = px;
+         g_bStats[d].last_lot    = vol;
+      }
    }
-   return oldest;
+
+   g_bStats[0].avg_price = (g_bStats[0].lots > 0.0) ? (buyWeightSum / g_bStats[0].lots) : 0.0;
+   g_bStats[1].avg_price = (g_bStats[1].lots > 0.0) ? (sellWeightSum / g_bStats[1].lots) : 0.0;
 }
+
+int      BasketCount(int direction)         { return g_bStats[direction].count; }
+double   BasketAvgPrice(int direction)      { return g_bStats[direction].avg_price; }
+double   BasketLastOpenPrice(int direction) { return g_bStats[direction].last_price; }
+double   BasketProfit(int direction)        { return g_bStats[direction].profit; }
+datetime BasketOldestTime(int direction)    { return g_bStats[direction].oldest_time; }
 
 int BasketCalcTpPoints(int direction, int n)
 {
-   int stopsLevel = (int)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-   int minTpPts   = MathMax(stopsLevel + 2, InpTpPointsMin);
+   int minTpPts   = MathMax(g_stopsLevel + 2, InpTpPointsMin);
    if(InpRecoveryModeEnable && g_recoveryMode[direction] && InpRecoveryReducedTp > 0)
       return MathMax(minTpPts, InpRecoveryReducedTp);
    int base_pts;
@@ -1020,10 +1081,9 @@ double BasketTargetPrice(int direction)
                        : avg - tp_pts * g_point * g_pointFactor;
    if(InpRecoveryModeEnable && g_recoveryMode[direction])
    {
-      double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      int sl = (int)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-      double min_dist = (sl + 2) * g_point * g_pointFactor;
+      double bid = g_sym.Bid();
+      double ask = g_sym.Ask();
+      double min_dist = (g_stopsLevel + 2) * g_point * g_pointFactor;
       if(direction==0 && raw_target < bid + min_dist)
          raw_target = NormPrice(bid + min_dist);
       if(direction==1 && raw_target > ask - min_dist)
@@ -1037,24 +1097,11 @@ double BasketTargetPrice(int direction)
 //=====================================================================
 double NextRecoveryLot(int direction)
 {
-   int n = BasketCount(direction);
+   int n = g_bStats[direction].count;
    if(n == 0) return NormLot(InpInitialLot);
 
-   double lastVol   = InpInitialLot;
-   bool   lastFound = false;
-   datetime lastTs  = 0;
-   ulong lastTicket = 0;
-   for(int i=0;i<PositionsTotal();i++)
-   {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
-      datetime posTime   = (datetime)g_pos.Time();
-      ulong    posTicket = g_pos.Ticket();
-      if(posTime > lastTs || (posTime==lastTs && posTicket>lastTicket))
-      { lastTs=posTime; lastTicket=posTicket; lastVol=g_pos.Volume(); lastFound=true; }
-   }
-   if(!lastFound) lastVol = InpInitialLot;
+   double lastVol = g_bStats[direction].last_lot;
+   if(lastVol <= 0.0) lastVol = InpInitialLot;
 
    double mult;
    if(n < 3)      mult = InpLotMultEarly;
@@ -1075,9 +1122,7 @@ double NextRecoveryLot(int direction)
 
    double nxt = base_lot * vol_scale;
    nxt = MathMin(nxt, InpRecoveryMaxLot);
-   double vmin = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
-   if(vmin <= 0) vmin = 0.01;
-   nxt = MathMax(nxt, vmin);
+   nxt = MathMax(nxt, g_volMin);
 
    return NormLot(nxt);
 }
@@ -1096,6 +1141,7 @@ void CloseAllPositions(const string reason)
          PrintFmt(StringFormat("CloseAll fail #%llu err=%d", g_pos.Ticket(), GetLastError()));
    }
    for(int d=0; d<2; d++) FinaliseBasket(d);
+   UpdateBasketCache();
 }
 
 void CloseBasket(int direction, const string reason)
@@ -1111,6 +1157,7 @@ void CloseBasket(int direction, const string reason)
          PrintFmt(StringFormat("CloseBasket fail #%llu err=%d", g_pos.Ticket(), GetLastError()));
    }
    FinaliseBasket(direction);
+   UpdateBasketCache();
    int cdMult = (basketPl >= 0.0) ? 1 : 6;
    g_cooldownUntil = TimeCurrent() + InpCooldownSec * cdMult;
    g_lastCloseTime = TimeCurrent();
@@ -1274,6 +1321,7 @@ void ManagePartialClose(int direction)
       g_pendingPartialClose[direction]    = false;
       g_peakProfit[direction]             = 0.0;
       g_trailingActive[direction]         = false;
+      UpdateBasketCache();
       PrintFmt(StringFormat("PartialClose %s stage %d/%d done: %d/%d @ basket $%.2f",
                direction==0?"BUY":"SELL", g_partialStage[direction], maxStage, closed, cnt, profit));
    }
@@ -1320,7 +1368,7 @@ void ManageRecovery(TFView &views[], bool &viewsOk[])
 
       double lastPx = BasketLastOpenPrice(direction);
       if(lastPx == 0.0) continue;
-      double curPrice = (direction==0) ? SymbolInfoDouble(Symbol(),SYMBOL_BID) : SymbolInfoDouble(Symbol(),SYMBOL_ASK);
+      double curPrice = (direction==0) ? g_sym.Bid() : g_sym.Ask();
       double adv_px = (direction==0) ? (lastPx - curPrice) : (curPrice - lastPx);
       double adv_pts = (g_point>0 && g_pointFactor>0) ? adv_px / (g_point*g_pointFactor) : 0.0;
 
@@ -1369,6 +1417,7 @@ void ManageRecovery(TFView &views[], bool &viewsOk[])
 
       if(ok) {
          if(direction==0) g_lastRecBuy=TimeCurrent(); else g_lastRecSell=TimeCurrent();
+         UpdateBasketCache();
          PrintFmt(StringFormat("ADAPTIVE REC %s lot=%.2f layer=%d gap=%.1f/%.1f (S/R adj) [Regime:%s]",
                   direction==0?"BUY":"SELL", lot, n+1, adv_pts, min_gap, g_regime));
       }
@@ -1380,10 +1429,11 @@ void ManageRecovery(TFView &views[], bool &viewsOk[])
 //=====================================================================
 void UpdateBasketTPs()
 {
+   if(g_bStats[0].count == 0 && g_bStats[1].count == 0) return;
    double one_pt = g_point * g_pointFactor;
    for(int direction=0; direction<=1; direction++)
    {
-      int n = BasketCount(direction);
+      int n = g_bStats[direction].count;
       if(n == 0) continue;
       double target = NormPrice(BasketTargetPrice(direction));
       if(target <= 0.0) continue;
@@ -1484,6 +1534,7 @@ void TryOpenNew(const Signal &sig)
    if(ok)
    {
       if(direction==0) g_lastOpenBuy=TimeCurrent(); else g_lastOpenSell=TimeCurrent();
+      UpdateBasketCache();
       PrintFmt(StringFormat("NEW %s %s lot=%.2f [Regime:%s] %s",
                sig.action, sig.strategy, open_lot, g_regime, sig.reason));
    }
@@ -1571,9 +1622,19 @@ void TryRecordBasketTrade(int direction)
 //=====================================================================
 void RecordCloses()
 {
+   int curTotal = PositionsTotal();
+   if(curTotal == 0 && g_trackedCount == 0)
+   {
+      if(g_basketAccumCount[0] > 0 || g_basketAccumCount[1] > 0)
+      {
+         for(int d=0; d<2; d++) TryRecordBasketTrade(d);
+      }
+      return;
+   }
+
    int cur_count=0;
    ulong cur_tickets[MAX_TRACKED];
-   for(int i=0;i<PositionsTotal();i++)
+   for(int i=0;i<curTotal;i++)
    {
       if(!g_pos.SelectByIndex(i)) continue;
       if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
@@ -1663,7 +1724,8 @@ void RecordCloses()
 
    // Rebuild tracked positions
    g_trackedCount=0;
-   for(int i=0;i<PositionsTotal()&&g_trackedCount<MAX_TRACKED;i++)
+   if(curTotal == 0) return;
+   for(int i=0;i<curTotal&&g_trackedCount<MAX_TRACKED;i++)
    {
       if(!g_pos.SelectByIndex(i)) continue;
       if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
@@ -1812,17 +1874,31 @@ ENUM_ORDER_TYPE_FILLING PickFilling()
 
 double NormLot(double lot)
 {
-   double step=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP);
-   double vmin=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
-   double vmax=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
-   if(step<=0)step=0.01; if(vmin<=0)vmin=0.01; if(vmax<=0)vmax=100.0;
-   lot = MathMax(vmin, MathMin(vmax, lot));
-   lot = NormalizeDouble(MathRound(lot/step)*step, 2);
-   return MathMax(vmin, lot);
+   lot = MathMax(g_volMin, MathMin(g_volMax, lot));
+   lot = NormalizeDouble(MathRound(lot / g_volStep) * g_volStep, 2);
+   return MathMax(g_volMin, lot);
 }
 
 double NormPrice(double p) { return NormalizeDouble(p, g_digits); }
 void   PrintFmt(const string msg) { Print(msg); }
+
+//=====================================================================
+// DASHBOARD THROTTLING (Fast Backtest Guard)
+//=====================================================================
+bool ShouldUpdateDashboard()
+{
+   if(!InpShowDashboard) return false;
+   if(g_isOptimization) return false;
+   if(g_isTester && !g_isVisual) return false;
+   if(g_isVisual)
+   {
+      static uint s_lastDashTick = 0;
+      uint now = GetTickCount();
+      if(now - s_lastDashTick < 250) return false;
+      s_lastDashTick = now;
+   }
+   return true;
+}
 
 void RefreshDashColors()
 {
