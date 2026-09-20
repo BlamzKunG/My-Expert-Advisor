@@ -5,44 +5,68 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, BlamzKunG"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.02"
+#property version   "2.20"
 #property strict
 
 //--- Include
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 
+//--- Enums
+enum ENUM_LOT_MODE
+{
+   LOT_MODE_STEP_ADD,   // Step Additive (e.g. +0.01 every N levels) - Recommended
+   LOT_MODE_MARTINGALE  // Standard Martingale (Multiplier per level)
+};
+
 //--- Input Parameters
-input group "MACD Settings"
-input int               InpFastEMA = 12;      // Fast EMA Period
-input int               InpSlowEMA = 26;      // Slow EMA Period
-input int               InpSignalSMA = 9;     // Signal SMA Period
+input group "=== MACD Settings ==="
+input int               InpFastEMA                 = 12;          // Fast EMA Period
+input int               InpSlowEMA                 = 26;          // Slow EMA Period
+input int               InpSignalSMA               = 9;           // Signal SMA Period
+input bool              InpRequireMACDCross        = true;        // Initial Entry on MACD Cross Only (false = state)
 
-input group "Trend Filter (Higher TF)"
-input bool              InpUseTrendFilter = true; // Use EMA Trend Filter
-input ENUM_TIMEFRAMES   InpTrendTF = PERIOD_H4;   // Trend Timeframe
-input int               InpTrendEMA = 200;        // Trend EMA Period
+input group "=== Trend Filter (Higher TF) ==="
+input bool              InpUseTrendFilter          = true;        // Use EMA Trend Filter (Initial Entry Only)
+input ENUM_TIMEFRAMES   InpTrendTF                 = PERIOD_H4;   // Trend Timeframe
+input int               InpTrendEMA                = 200;         // Trend EMA Period
 
-input group "Dynamic Grid (ATR)"
-input bool              InpUseDynamicGrid = true; // Use ATR for Grid Step
-input int               InpATRPeriod = 14;        // ATR Period
-input double            InpATRMultiplier = 2.0;   // ATR Multiplier for Step
-input int               InpMinGridStepPips = 50;  // Minimum Grid Step (Pips)
+input group "=== Dynamic Grid (ATR) ==="
+input bool              InpUseDynamicGrid          = true;        // Use ATR for Grid Step
+input int               InpATRPeriod               = 14;          // ATR Period
+input double            InpATRMultiplier           = 2.0;         // ATR Multiplier for Step
+input int               InpMinGridStepPips         = 50;          // Minimum Grid Step (Pips)
 
-input group "Standard Grid Settings"
-input double            InpInitialLot = 0.01; // Initial Lot Size
-input int               InpGridStepPips = 100;// Fixed Grid Step (if ATR disabled)
-input double            InpLotMultiplier = 1.5;// Lot Multiplier
-input int               InpMaxGridLevels = 10;// Max Grid Levels
+input group "=== Grid & Lot Sizing Settings ==="
+input ENUM_LOT_MODE     InpLotMode                 = LOT_MODE_STEP_ADD; // Lot Calculation Mode
+input double            InpInitialLot              = 0.01;        // Initial Lot Size
+input double            InpMaxLotLimit             = 0.20;        // Max Single Order Lot Cap
+input double            InpLotMultiplier           = 1.5;         // Lot Multiplier (If Martingale Mode)
+input int               InpStepEveryNLevels        = 5;           // Increase Lot Every N Levels (If Step Mode)
+input double            InpStepLotAdd              = 0.01;        // Lot Amount to Add per Tier (If Step Mode)
+input int               InpGridStepPips            = 100;         // Base Grid Step in Pips (if ATR disabled)
+input double            InpGridStepMultiplier      = 1.0;         // Grid Step Expansion (1.0 = Fixed, >1.0 = Expands)
+input int               InpMaxGridLevels           = 10;          // Max Grid Levels
 
-input group "Risk Management"
-input double            InpBasketTPUSD = 10.0;// Basket Take Profit (USD)
-input double            InpEquityStopPercent = 20.0; // Equity Stop Percent
-input int               InpMaxSpread = 30;    // Max Spread in Pips (0 to disable)
+input group "=== Smart Hedge Recovery (Reduce DD) ==="
+input bool              InpEnableHedge             = true;        // Enable Hedge Follow Order
+input int               InpStartHedgeAtLevel       = 5;           // Start Hedge when Grid Count >= N
+input double            InpHedgeLotRatio           = 0.5;         // Hedge Lot Ratio of Trapped Volume (0.5 = 50%)
+input bool              InpAllowIndividualHedgeTP  = false;       // Allow Hedge to Take Profit Individually
+input double            InpHedgeTPUSD              = 5.0;         // Individual Hedge TP (USD, if enabled)
 
-input group "Advanced Settings"
-input int               InpMagicNumber = 123456; // Magic Number
-input int               InpTrailingStop = 50;   // Trailing Stop in Pips (0 to disable)
+input group "=== Profit & Risk Management ==="
+input double            InpBasketTPUSD             = 10.0;        // Standard Basket TP (Account Currency $)
+input double            InpNetBasketTPUSD          = 5.0;         // Net Basket TP when Hedged (Account Currency $)
+input bool              InpUseBasketTrail          = true;        // Use Basket Trailing Profit in USD (Guaranteed Win)
+input double            InpBasketTrailStartUSD     = 10.0;        // Profit to Start Trailing ($)
+input double            InpBasketTrailStepUSD      = 3.0;         // Trailing Callback Buffer ($)
+input double            InpEquityStopPercent       = 20.0;        // Equity Stop Percent (Drawdown Cut)
+input int               InpMaxSpread               = 30;          // Max Spread in Pips (0 to disable)
+input bool              InpUseTrendCut             = false;       // Close Basket on MACD Reversal (Caution)
+
+input group "=== Advanced Settings ==="
+input int               InpMagicNumber             = 123456;      // Magic Number
 
 //--- Global Variables
 CTrade         m_trade;              // Trading class
@@ -55,21 +79,72 @@ double         m_macd_signal[];      // MACD signal buffer
 double         m_ema_trend[];        // EMA trend buffer
 double         m_atr_buffer[];       // ATR buffer
 int            m_pips_multiplier;    // Multiplier for 3/5 digits
+int            m_hedge_magic;        // Unique Magic Number for Hedge positions
 
-enum ENUM_TREND_STATE
-{
-   TREND_NONE,
-   TREND_UP,
-   TREND_DOWN
-};
+// State trackers
+bool           m_trading_halted;     // Halted flag when Equity Stop triggers
+double         m_max_net_profit_buy; // Peak profit tracked for BUY basket
+double         m_max_net_profit_sell;// Peak profit tracked for SELL basket
+datetime       m_last_buy_bar;       // Prevent multiple initial buy entries on same bar
+datetime       m_last_sell_bar;      // Prevent multiple initial sell entries on same bar
+
+//+------------------------------------------------------------------+
+//| Forward declarations                                             |
+//+------------------------------------------------------------------+
+double   NormalizeLot(double lots);
+double   CalculateNextLot(ENUM_POSITION_TYPE type, int currentCount);
+bool     CheckEquityProtection();
+bool     UpdateIndicators();
+void     HandleNetBasketTPAndTrailing();
+void     HandleSmartHedge();
+void     HandleTrendReversal();
+void     HandleTrading();
+int      CountPositions(ENUM_POSITION_TYPE type);
+int      CountHedgePositions(ENUM_POSITION_TYPE type);
+double   CalculateBasketProfit(ENUM_POSITION_TYPE type);
+double   CalculateHedgeProfit(ENUM_POSITION_TYPE type);
+double   GetBasketTotalVolume(ENUM_POSITION_TYPE type);
+double   GetBasketAveragePrice(ENUM_POSITION_TYPE type);
+void     CloseAllPositions(ENUM_POSITION_TYPE type);
+void     CloseHedgePositions(ENUM_POSITION_TYPE type);
+double   GetLowestPositionPrice(ENUM_POSITION_TYPE type);
+double   GetHighestPositionPrice(ENUM_POSITION_TYPE type);
+double   GetLastPositionLot(ENUM_POSITION_TYPE type);
+bool     OpenPosition(ENUM_POSITION_TYPE type, double lots);
+bool     OpenHedgePosition(ENUM_POSITION_TYPE type, double lots);
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   //--- Detect pips multiplier
+   m_trading_halted      = false;
+   m_max_net_profit_buy  = 0.0;
+   m_max_net_profit_sell = 0.0;
+   m_last_buy_bar        = 0;
+   m_last_sell_bar       = 0;
+   m_hedge_magic         = InpMagicNumber + 999;
+
+   //--- Detect pips multiplier (for 3/5 digits)
    m_pips_multiplier = (_Digits == 3 || _Digits == 5) ? 10 : 1;
+
+   //--- Check Account Margin Mode (Recommend Hedging)
+   if((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+   {
+      Print("WARNING: Grid/Martingale & Hedge strategy requires a HEDGING account! Detected Netting account.");
+   }
+
+   //--- Configure CTrade
+   m_trade.SetExpertMagicNumber(InpMagicNumber);
+   
+   //--- Set supported order filling mode automatically
+   uint filling = (uint)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) != 0)
+      m_trade.SetTypeFilling(ORDER_FILLING_FOK);
+   else if((filling & SYMBOL_FILLING_IOC) != 0)
+      m_trade.SetTypeFilling(ORDER_FILLING_IOC);
+   else
+      m_trade.SetTypeFilling(ORDER_FILLING_RETURN);
 
    //--- Initialize MACD handle
    m_handle_macd = iMACD(_Symbol, _Period, InpFastEMA, InpSlowEMA, InpSignalSMA, PRICE_CLOSE);
@@ -107,9 +182,6 @@ int OnInit()
    ArraySetAsSeries(m_ema_trend, true);
    ArraySetAsSeries(m_atr_buffer, true);
    
-   //--- Set trade magic number
-   m_trade.SetExpertMagicNumber(InpMagicNumber);
-   
    return(INIT_SUCCEEDED);
 }
 
@@ -118,9 +190,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   IndicatorRelease(m_handle_macd);
-   if(InpUseTrendFilter) IndicatorRelease(m_handle_ema_trend);
-   if(InpUseDynamicGrid) IndicatorRelease(m_handle_atr);
+   if(m_handle_macd != INVALID_HANDLE)
+      IndicatorRelease(m_handle_macd);
+      
+   if(InpUseTrendFilter && m_handle_ema_trend != INVALID_HANDLE) 
+      IndicatorRelease(m_handle_ema_trend);
+      
+   if(InpUseDynamicGrid && m_handle_atr != INVALID_HANDLE) 
+      IndicatorRelease(m_handle_atr);
 }
 
 //+------------------------------------------------------------------+
@@ -128,28 +205,87 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // 1. Equity Protector
+   // 1. If halted by Equity Protection, stop trading
+   if(m_trading_halted)
+      return;
+
+   // 2. Equity Protector (Drawdown cut)
    if(CheckEquityProtection())
       return;
 
-   // 2. Update Indicator Values
+   // 3. Centralized Net Basket TP & Trailing Profit (Guaranteed positive exit)
+   HandleNetBasketTPAndTrailing();
+
+   // 4. Smart Hedge Recovery (Opens hedge if basket count >= InpStartHedgeAtLevel)
+   if(InpEnableHedge)
+      HandleSmartHedge();
+
+   // 5. Update Indicator Values (Uses closed bar 1 to avoid repainting)
    if(!UpdateIndicators())
       return;
 
-   ENUM_TREND_STATE currentTrend = GetMACDState();
+   // 6. Optional Trend Reversal Cut (Disabled by default to protect Grid)
+   if(InpUseTrendCut)
+      HandleTrendReversal();
 
-   // 3. Basket Take Profit
-   HandleBasketTP();
+   // 7. Main Trading Logic (Initial Entry & Grid Averaging)
+   HandleTrading();
+}
 
-   // 4. Trend Reversal Cut (Hard Cut)
-   HandleTrendReversal(currentTrend);
+//+------------------------------------------------------------------+
+//| Normalize Lot to Broker Step and Min/Max                         |
+//+------------------------------------------------------------------+
+double NormalizeLot(double lots)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   // 5. Initial Entry & Grid Expansion
-   HandleTrading(currentTrend);
+   int lotDigits = 0;
+   if(lotStep > 0.0)
+   {
+      double temp = lotStep;
+      while(temp < 1.0 && lotDigits < 8)
+      {
+         temp *= 10.0;
+         lotDigits++;
+      }
+      lots = MathRound(lots / lotStep) * lotStep;
+   }
+   lots = NormalizeDouble(lots, lotDigits);
 
-   // 6. Trailing Stop
-   if(InpTrailingStop > 0)
-      HandleTrailingStop();
+   if(lots < minLot) lots = minLot;
+   if(lots > maxLot) lots = maxLot;
+
+   return lots;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Next Grid Order Lot Size                               |
+//+------------------------------------------------------------------+
+double CalculateNextLot(ENUM_POSITION_TYPE type, int currentCount)
+{
+   if(currentCount <= 0)
+      return NormalizeLot(InpInitialLot);
+
+   double nextLot = InpInitialLot;
+
+   if(InpLotMode == LOT_MODE_MARTINGALE)
+   {
+      double lastLot = GetLastPositionLot(type);
+      nextLot = (lastLot > 0.0) ? (lastLot * InpLotMultiplier) : InpInitialLot;
+   }
+   else if(InpLotMode == LOT_MODE_STEP_ADD)
+   {
+      int tier = (InpStepEveryNLevels > 0) ? (currentCount / InpStepEveryNLevels) : 0;
+      nextLot = InpInitialLot + (tier * InpStepLotAdd);
+   }
+
+   // Cap with Max Lot Limit
+   if(InpMaxLotLimit > 0.0 && nextLot > InpMaxLotLimit)
+      nextLot = InpMaxLotLimit;
+
+   return NormalizeLot(nextLot);
 }
 
 //+------------------------------------------------------------------+
@@ -158,41 +294,48 @@ void OnTick()
 bool CheckEquityProtection()
 {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance <= 0) return false;
    
    double drawdown = (balance - equity) / balance * 100.0;
 
    if(drawdown >= InpEquityStopPercent)
    {
-      Print("Equity Protection Triggered! Drawdown: ", DoubleToString(drawdown, 2), "%");
+      PrintFormat("Equity Protection Triggered! Drawdown: %.2f%% (Limit: %.2f%%). Closing all positions and halting EA.", 
+                  drawdown, InpEquityStopPercent);
       CloseAllPositions(POSITION_TYPE_BUY);
       CloseAllPositions(POSITION_TYPE_SELL);
+      CloseHedgePositions(POSITION_TYPE_BUY);
+      CloseHedgePositions(POSITION_TYPE_SELL);
+      m_max_net_profit_buy  = 0.0;
+      m_max_net_profit_sell = 0.0;
+      m_trading_halted      = true; // Prevent reopening trades on depleted account
       return true;
    }
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Update Indicator Values                                          |
+//| Update Indicator Values (Shift 1 = closed bar)                   |
 //+------------------------------------------------------------------+
 bool UpdateIndicators()
 {
-   if(CopyBuffer(m_handle_macd, MAIN_LINE, 0, 2, m_macd_main) < 2 ||
-      CopyBuffer(m_handle_macd, SIGNAL_LINE, 0, 2, m_macd_signal) < 2)
+   // Copy shift 1 and shift 2 to check crossover on completed candles
+   if(CopyBuffer(m_handle_macd, MAIN_LINE, 1, 2, m_macd_main) < 2 ||
+      CopyBuffer(m_handle_macd, SIGNAL_LINE, 1, 2, m_macd_signal) < 2)
    {
       return false;
    }
 
    if(InpUseTrendFilter)
    {
-      if(CopyBuffer(m_handle_ema_trend, 0, 0, 1, m_ema_trend) < 1)
+      if(CopyBuffer(m_handle_ema_trend, 0, 1, 1, m_ema_trend) < 1)
          return false;
    }
 
    if(InpUseDynamicGrid)
    {
-      if(CopyBuffer(m_handle_atr, 0, 0, 1, m_atr_buffer) < 1)
+      if(CopyBuffer(m_handle_atr, 0, 1, 1, m_atr_buffer) < 1)
          return false;
    }
 
@@ -200,190 +343,378 @@ bool UpdateIndicators()
 }
 
 //+------------------------------------------------------------------+
-//| Get Current MACD Trend State                                     |
+//| Centralized Net Basket TP & Trailing Profit (Guaranteed Positive)|
 //+------------------------------------------------------------------+
-ENUM_TREND_STATE GetMACDState()
+void HandleNetBasketTPAndTrailing()
 {
-   double main = m_macd_main[0];
-   double signal = m_macd_signal[0];
+   //================================================================
+   // 1. BUY CYCLE (BUY Grid + SELL Hedge if any)
+   //================================================================
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   int hedgeSellCount = CountHedgePositions(POSITION_TYPE_SELL);
 
-   // Broadened logic to ensure more frequent entries while maintaining direction
-   if(main > signal)
-      return TREND_UP;
-   if(main < signal)
-      return TREND_DOWN;
-
-   return TREND_NONE;
-}
-
-//+------------------------------------------------------------------+
-//| Handle Basket Take Profit                                        |
-//+------------------------------------------------------------------+
-void HandleBasketTP()
-{
-   if(CalculateBasketProfit(POSITION_TYPE_BUY) >= InpBasketTPUSD)
+   if(buyCount > 0)
    {
-      Print("Buy Basket TP Reached");
-      CloseAllPositions(POSITION_TYPE_BUY);
-   }
+      double buyProfit       = CalculateBasketProfit(POSITION_TYPE_BUY);
+      double hedgeSellProfit = CalculateHedgeProfit(POSITION_TYPE_SELL);
+      double netProfit       = buyProfit + hedgeSellProfit;
 
-   if(CalculateBasketProfit(POSITION_TYPE_SELL) >= InpBasketTPUSD)
-   {
-      Print("Sell Basket TP Reached");
-      CloseAllPositions(POSITION_TYPE_SELL);
-   }
-}
+      // CASE A: HEDGED RECOVERY (BUY Grid + SELL Hedge both exist)
+      if(hedgeSellCount > 0)
+      {
+         // CRITICAL RULE: NEVER close unless combined NET PROFIT is strictly positive!
+         if(netProfit >= InpNetBasketTPUSD)
+         {
+            PrintFormat("Hedged BUY Cycle: Net TP Hit! Net Profit: $%.2f (Buy: $%.2f, Hedge: $%.2f) >= Target $%.2f. Closing all.",
+                        netProfit, buyProfit, hedgeSellProfit, InpNetBasketTPUSD);
+            CloseAllPositions(POSITION_TYPE_BUY);
+            CloseHedgePositions(POSITION_TYPE_SELL);
+            m_max_net_profit_buy = 0.0;
+            return;
+         }
 
-//+------------------------------------------------------------------+
-//| Handle Trend Reversal Cut                                        |
-//+------------------------------------------------------------------+
-void HandleTrendReversal(ENUM_TREND_STATE trend)
-{
-   if(trend == TREND_DOWN && CountPositions(POSITION_TYPE_BUY) > 0)
-   {
-      Print("Trend Reversal: Closing all Buy positions");
-      CloseAllPositions(POSITION_TYPE_BUY);
-   }
-   
-   if(trend == TREND_UP && CountPositions(POSITION_TYPE_SELL) > 0)
-   {
-      Print("Trend Reversal: Closing all Sell positions");
-      CloseAllPositions(POSITION_TYPE_SELL);
-   }
-}
+         // Optional individual hedge TP if enabled
+         if(InpAllowIndividualHedgeTP && InpHedgeTPUSD > 0.0 && hedgeSellProfit >= InpHedgeTPUSD)
+         {
+            PrintFormat("Smart Hedge: Individual Hedge TP Hit ($%.2f >= $%.2f). Booking hedge profit.",
+                        hedgeSellProfit, InpHedgeTPUSD);
+            CloseHedgePositions(POSITION_TYPE_SELL);
+            return;
+         }
+      }
+      // CASE B: NORMAL UNHEDGED BUY GRID
+      else
+      {
+         if(InpUseBasketTrail)
+         {
+            // Trailing Profit in USD
+            if(netProfit >= InpBasketTrailStartUSD)
+            {
+               if(netProfit > m_max_net_profit_buy)
+               {
+                  m_max_net_profit_buy = netProfit;
+                  PrintFormat("BUY Basket Trailing: Peak profit raised to $%.2f (Locked min: $%.2f)",
+                              m_max_net_profit_buy, m_max_net_profit_buy - InpBasketTrailStepUSD);
+               }
+            }
 
-//+------------------------------------------------------------------+
-//| Main Trading Logic (Entry & Grid)                                |
-//+------------------------------------------------------------------+
-void HandleTrading(ENUM_TREND_STATE trend)
-{
-   //--- Max Spread Filter
-   if(InpMaxSpread > 0)
-   {
-      double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-      if(spread > InpMaxSpread) return;
-   }
-
-   //--- Trend Filter (EMA 200 on Higher TF)
-   bool allowBuy = true;
-   bool allowSell = true;
-   
-   if(InpUseTrendFilter)
-   {
-      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double emaVal = m_ema_trend[0];
-      
-      if(currentPrice < emaVal) allowBuy = false;
-      if(currentPrice > emaVal) allowSell = false;
-   }
-
-   //--- Calculate Grid Step (Dynamic or Fixed)
-   double stepPrice;
-   if(InpUseDynamicGrid)
-   {
-      double atr = m_atr_buffer[0];
-      double dynamicStep = atr * InpATRMultiplier;
-      double minStep = InpMinGridStepPips * _Point * m_pips_multiplier;
-      stepPrice = MathMax(dynamicStep, minStep);
+            // If trailing is active and profit drops to/below locked cutoff
+            if(m_max_net_profit_buy >= InpBasketTrailStartUSD)
+            {
+               double lockedCutoff = m_max_net_profit_buy - InpBasketTrailStepUSD;
+               if(netProfit <= lockedCutoff)
+               {
+                  PrintFormat("BUY Basket Trailing Exit! Profit: $%.2f <= Locked Cutoff: $%.2f. Closing in guaranteed profit.",
+                              netProfit, lockedCutoff);
+                  CloseAllPositions(POSITION_TYPE_BUY);
+                  m_max_net_profit_buy = 0.0;
+                  return;
+               }
+            }
+         }
+         else
+         {
+            // Fixed Target TP in USD
+            if(netProfit >= InpBasketTPUSD)
+            {
+               PrintFormat("BUY Basket TP Hit! Profit: $%.2f >= Target: $%.2f. Closing basket.", netProfit, InpBasketTPUSD);
+               CloseAllPositions(POSITION_TYPE_BUY);
+               m_max_net_profit_buy = 0.0;
+               return;
+            }
+         }
+      }
    }
    else
    {
-      stepPrice = InpGridStepPips * _Point * m_pips_multiplier;
-   }
-
-   //--- BUY LOGIC
-   int buyCount = CountPositions(POSITION_TYPE_BUY);
-   if(trend == TREND_UP && allowBuy)
-   {
-      if(buyCount == 0)
+      m_max_net_profit_buy = 0.0;
+      // If BUY basket is empty, close any orphaned SELL hedge
+      if(hedgeSellCount > 0)
       {
-         OpenPosition(POSITION_TYPE_BUY, InpInitialLot);
-      }
-      else if(buyCount < InpMaxGridLevels)
-      {
-         double lastPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
-         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-         if(currentPrice <= lastPrice - stepPrice)
-         {
-            double nextLot = GetLastPositionLot(POSITION_TYPE_BUY) * InpLotMultiplier;
-            OpenPosition(POSITION_TYPE_BUY, nextLot);
-         }
+         CloseHedgePositions(POSITION_TYPE_SELL);
       }
    }
 
-   //--- SELL LOGIC
+   //================================================================
+   // 2. SELL CYCLE (SELL Grid + BUY Hedge if any)
+   //================================================================
    int sellCount = CountPositions(POSITION_TYPE_SELL);
-   if(trend == TREND_DOWN && allowSell)
-   {
-      if(sellCount == 0)
-      {
-         OpenPosition(POSITION_TYPE_SELL, InpInitialLot);
-      }
-      else if(sellCount < InpMaxGridLevels)
-      {
-         double lastPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
-         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   int hedgeBuyCount = CountHedgePositions(POSITION_TYPE_BUY);
 
-         if(currentPrice >= lastPrice + stepPrice)
+   if(sellCount > 0)
+   {
+      double sellProfit     = CalculateBasketProfit(POSITION_TYPE_SELL);
+      double hedgeBuyProfit = CalculateHedgeProfit(POSITION_TYPE_BUY);
+      double netProfit      = sellProfit + hedgeBuyProfit;
+
+      // CASE A: HEDGED RECOVERY (SELL Grid + BUY Hedge both exist)
+      if(hedgeBuyCount > 0)
+      {
+         // CRITICAL RULE: NEVER close unless combined NET PROFIT is strictly positive!
+         if(netProfit >= InpNetBasketTPUSD)
          {
-            double nextLot = GetLastPositionLot(POSITION_TYPE_SELL) * InpLotMultiplier;
-            OpenPosition(POSITION_TYPE_SELL, nextLot);
+            PrintFormat("Hedged SELL Cycle: Net TP Hit! Net Profit: $%.2f (Sell: $%.2f, Hedge: $%.2f) >= Target $%.2f. Closing all.",
+                        netProfit, sellProfit, hedgeBuyProfit, InpNetBasketTPUSD);
+            CloseAllPositions(POSITION_TYPE_SELL);
+            CloseHedgePositions(POSITION_TYPE_BUY);
+            m_max_net_profit_sell = 0.0;
+            return;
          }
+
+         // Optional individual hedge TP if enabled
+         if(InpAllowIndividualHedgeTP && InpHedgeTPUSD > 0.0 && hedgeBuyProfit >= InpHedgeTPUSD)
+         {
+            PrintFormat("Smart Hedge: Individual Hedge TP Hit ($%.2f >= $%.2f). Booking hedge profit.",
+                        hedgeBuyProfit, InpHedgeTPUSD);
+            CloseHedgePositions(POSITION_TYPE_BUY);
+            return;
+         }
+      }
+      // CASE B: NORMAL UNHEDGED SELL GRID
+      else
+      {
+         if(InpUseBasketTrail)
+         {
+            // Trailing Profit in USD
+            if(netProfit >= InpBasketTrailStartUSD)
+            {
+               if(netProfit > m_max_net_profit_sell)
+               {
+                  m_max_net_profit_sell = netProfit;
+                  PrintFormat("SELL Basket Trailing: Peak profit raised to $%.2f (Locked min: $%.2f)",
+                              m_max_net_profit_sell, m_max_net_profit_sell - InpBasketTrailStepUSD);
+               }
+            }
+
+            // If trailing is active and profit drops to/below locked cutoff
+            if(m_max_net_profit_sell >= InpBasketTrailStartUSD)
+            {
+               double lockedCutoff = m_max_net_profit_sell - InpBasketTrailStepUSD;
+               if(netProfit <= lockedCutoff)
+               {
+                  PrintFormat("SELL Basket Trailing Exit! Profit: $%.2f <= Locked Cutoff: $%.2f. Closing in guaranteed profit.",
+                              netProfit, lockedCutoff);
+                  CloseAllPositions(POSITION_TYPE_SELL);
+                  m_max_net_profit_sell = 0.0;
+                  return;
+               }
+            }
+         }
+         else
+         {
+            // Fixed Target TP in USD
+            if(netProfit >= InpBasketTPUSD)
+            {
+               PrintFormat("SELL Basket TP Hit! Profit: $%.2f >= Target: $%.2f. Closing basket.", netProfit, InpBasketTPUSD);
+               CloseAllPositions(POSITION_TYPE_SELL);
+               m_max_net_profit_sell = 0.0;
+               return;
+            }
+         }
+      }
+   }
+   else
+   {
+      m_max_net_profit_sell = 0.0;
+      // If SELL basket is empty, close any orphaned BUY hedge
+      if(hedgeBuyCount > 0)
+      {
+         CloseHedgePositions(POSITION_TYPE_BUY);
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Handle Trailing Stop for All Positions                           |
+//| Handle Smart Hedge Entry                                         |
 //+------------------------------------------------------------------+
-void HandleTrailingStop()
+void HandleSmartHedge()
 {
-   double trailingStopVal = InpTrailingStop * _Point * m_pips_multiplier;
+   // 1. BUY BASKET IS TRAPPED (Price drops, open SELL Hedge to offset)
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   int hedgeSellCount = CountHedgePositions(POSITION_TYPE_SELL);
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   if(buyCount >= InpStartHedgeAtLevel && hedgeSellCount == 0)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
-      {
-         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
-            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-         {
-            ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            double currentSL = PositionGetDouble(POSITION_SL);
-            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double trappedVolume = GetBasketTotalVolume(POSITION_TYPE_BUY);
+      double hedgeLot = trappedVolume * InpHedgeLotRatio;
+      if(InpMaxLotLimit > 0.0 && hedgeLot > InpMaxLotLimit)
+         hedgeLot = InpMaxLotLimit;
 
-            if(type == POSITION_TYPE_BUY)
-            {
-               double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-               if(bid - openPrice > trailingStopVal)
-               {
-                  double newSL = bid - trailingStopVal;
-                  if(newSL > currentSL || currentSL == 0)
-                  {
-                     m_trade.PositionModify(ticket, NormalizeDouble(newSL, _Digits), PositionGetDouble(POSITION_TP));
-                  }
-               }
-            }
-            else if(type == POSITION_TYPE_SELL)
-            {
-               double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-               if(openPrice - ask > trailingStopVal)
-               {
-                  double newSL = ask + trailingStopVal;
-                  if(newSL < currentSL || currentSL == 0)
-                  {
-                     m_trade.PositionModify(ticket, NormalizeDouble(newSL, _Digits), PositionGetDouble(POSITION_TP));
-                  }
-               }
-            }
+      PrintFormat("Smart Hedge: BUY basket trapped (%d orders, %.2f lots). Opening SELL Hedge (%.2f lots)",
+                  buyCount, trappedVolume, hedgeLot);
+      OpenHedgePosition(POSITION_TYPE_SELL, hedgeLot);
+   }
+
+   // 2. SELL BASKET IS TRAPPED (Price rises, open BUY Hedge to offset)
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   int hedgeBuyCount = CountHedgePositions(POSITION_TYPE_BUY);
+
+   if(sellCount >= InpStartHedgeAtLevel && hedgeBuyCount == 0)
+   {
+      double trappedVolume = GetBasketTotalVolume(POSITION_TYPE_SELL);
+      double hedgeLot = trappedVolume * InpHedgeLotRatio;
+      if(InpMaxLotLimit > 0.0 && hedgeLot > InpMaxLotLimit)
+         hedgeLot = InpMaxLotLimit;
+
+      PrintFormat("Smart Hedge: SELL basket trapped (%d orders, %.2f lots). Opening BUY Hedge (%.2f lots)",
+                  sellCount, trappedVolume, hedgeLot);
+      OpenHedgePosition(POSITION_TYPE_BUY, hedgeLot);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Handle Trend Reversal Cut (Optional)                             |
+//+------------------------------------------------------------------+
+void HandleTrendReversal()
+{
+   if(!InpUseTrendCut) return;
+
+   double macdMain = m_macd_main[0];
+   double macdSig  = m_macd_signal[0];
+
+   if(macdMain < macdSig && CountPositions(POSITION_TYPE_BUY) > 0)
+   {
+      Print("Trend Reversal: Closing all Buy positions");
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseHedgePositions(POSITION_TYPE_SELL);
+      m_max_net_profit_buy = 0.0;
+   }
+   
+   if(macdMain > macdSig && CountPositions(POSITION_TYPE_SELL) > 0)
+   {
+      Print("Trend Reversal: Closing all Sell positions");
+      CloseAllPositions(POSITION_TYPE_SELL);
+      CloseHedgePositions(POSITION_TYPE_BUY);
+      m_max_net_profit_sell = 0.0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Main Trading Logic (Initial Entry & Grid Averaging)              |
+//+------------------------------------------------------------------+
+void HandleTrading()
+{
+   //--- Max Spread Filter (Points)
+   if(InpMaxSpread > 0)
+   {
+      long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+      long maxSpreadPoints = (long)(InpMaxSpread * m_pips_multiplier);
+      if(spread > maxSpreadPoints) 
+         return;
+   }
+
+   //--- Trend Filter (EMA 200 on Higher TF) - ONLY applies to initial entry (Level 1)
+   bool allowInitialBuy  = true;
+   bool allowInitialSell = true;
+   
+   if(InpUseTrendFilter)
+   {
+      double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double emaVal     = m_ema_trend[0];
+      
+      if(currentBid < emaVal) allowInitialBuy  = false;
+      if(currentBid > emaVal) allowInitialSell = false;
+   }
+
+   //--- Check MACD Signal on closed candles (Shift 1 = current, Shift 2 = previous)
+   double macdMainCurr = m_macd_main[0];
+   double macdSigCurr  = m_macd_signal[0];
+   double macdMainPrev = m_macd_main[1];
+   double macdSigPrev  = m_macd_signal[1];
+
+   bool buySignal  = false;
+   bool sellSignal = false;
+
+   if(InpRequireMACDCross)
+   {
+      buySignal  = (macdMainCurr > macdSigCurr && macdMainPrev <= macdSigPrev);
+      sellSignal = (macdMainCurr < macdSigCurr && macdMainPrev >= macdSigPrev);
+   }
+   else
+   {
+      buySignal  = (macdMainCurr > macdSigCurr);
+      sellSignal = (macdMainCurr < macdSigCurr);
+   }
+
+   //--- Calculate Base Grid Step Distance in price
+   double baseStep;
+   if(InpUseDynamicGrid)
+   {
+      double atr         = m_atr_buffer[0];
+      double dynamicStep = atr * InpATRMultiplier;
+      double minStep     = InpMinGridStepPips * _Point * m_pips_multiplier;
+      baseStep           = MathMax(dynamicStep, minStep);
+   }
+   else
+   {
+      baseStep = InpGridStepPips * _Point * m_pips_multiplier;
+   }
+
+   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+
+   //================================================================
+   // BUY LOGIC
+   //================================================================
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+
+   if(buyCount == 0)
+   {
+      // Initial Entry (Level 1): Requires MACD Signal, EMA Filter, and New Bar Guard
+      if(buySignal && allowInitialBuy && currentBarTime != m_last_buy_bar)
+      {
+         if(OpenPosition(POSITION_TYPE_BUY, NormalizeLot(InpInitialLot)))
+         {
+            m_last_buy_bar = currentBarTime;
          }
+      }
+   }
+   else if(buyCount < InpMaxGridLevels)
+   {
+      // Dynamic Grid Step Expansion
+      double stepPrice = baseStep * MathPow(InpGridStepMultiplier, MathMax(0, buyCount - 1));
+      double lowestBuyPrice = GetLowestPositionPrice(POSITION_TYPE_BUY);
+      double currentAsk     = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      if(lowestBuyPrice > 0.0 && currentAsk <= (lowestBuyPrice - stepPrice))
+      {
+         double nextLot = CalculateNextLot(POSITION_TYPE_BUY, buyCount);
+         OpenPosition(POSITION_TYPE_BUY, nextLot);
+      }
+   }
+
+   //================================================================
+   // SELL LOGIC
+   //================================================================
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+
+   if(sellCount == 0)
+   {
+      // Initial Entry (Level 1): Requires MACD Signal, EMA Filter, and New Bar Guard
+      if(sellSignal && allowInitialSell && currentBarTime != m_last_sell_bar)
+      {
+         if(OpenPosition(POSITION_TYPE_SELL, NormalizeLot(InpInitialLot)))
+         {
+            m_last_sell_bar = currentBarTime;
+         }
+      }
+   }
+   else if(sellCount < InpMaxGridLevels)
+   {
+      // Dynamic Grid Step Expansion
+      double stepPrice = baseStep * MathPow(InpGridStepMultiplier, MathMax(0, sellCount - 1));
+      double highestSellPrice = GetHighestPositionPrice(POSITION_TYPE_SELL);
+      double currentBid       = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+      if(highestSellPrice > 0.0 && currentBid >= (highestSellPrice + stepPrice))
+      {
+         double nextLot = CalculateNextLot(POSITION_TYPE_SELL, sellCount);
+         OpenPosition(POSITION_TYPE_SELL, nextLot);
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Count Open Positions of Type                                     |
+//| Count Open Standard Positions of Type                            |
 //+------------------------------------------------------------------+
 int CountPositions(ENUM_POSITION_TYPE type)
 {
@@ -405,11 +736,33 @@ int CountPositions(ENUM_POSITION_TYPE type)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Total Profit for Position Type                         |
+//| Count Open Hedge Positions of Type                               |
+//+------------------------------------------------------------------+
+int CountHedgePositions(ENUM_POSITION_TYPE type)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == m_hedge_magic)
+         {
+            count++;
+         }
+      }
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Total Basket Profit of Standard Grid                   |
 //+------------------------------------------------------------------+
 double CalculateBasketProfit(ENUM_POSITION_TYPE type)
 {
-   double totalProfit = 0;
+   double totalProfit = 0.0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -419,7 +772,8 @@ double CalculateBasketProfit(ENUM_POSITION_TYPE type)
             PositionGetInteger(POSITION_TYPE) == type &&
             PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
-            totalProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
+            totalProfit += PositionGetDouble(POSITION_PROFIT) 
+                         + PositionGetDouble(POSITION_SWAP);
          }
       }
    }
@@ -427,60 +781,138 @@ double CalculateBasketProfit(ENUM_POSITION_TYPE type)
 }
 
 //+------------------------------------------------------------------+
-//| Close All Positions of Type                                      |
+//| Calculate Total Profit of Hedge Positions                        |
+//+------------------------------------------------------------------+
+double CalculateHedgeProfit(ENUM_POSITION_TYPE type)
+{
+   double totalProfit = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == m_hedge_magic)
+         {
+            totalProfit += PositionGetDouble(POSITION_PROFIT) 
+                         + PositionGetDouble(POSITION_SWAP);
+         }
+      }
+   }
+   return totalProfit;
+}
+
+//+------------------------------------------------------------------+
+//| Get Total Open Volume of Standard Basket                         |
+//+------------------------------------------------------------------+
+double GetBasketTotalVolume(ENUM_POSITION_TYPE type)
+{
+   double totalVol = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            totalVol += PositionGetDouble(POSITION_VOLUME);
+         }
+      }
+   }
+   return totalVol;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Volume-Weighted Average Open Price of Basket           |
+//+------------------------------------------------------------------+
+double GetBasketAveragePrice(ENUM_POSITION_TYPE type)
+{
+   double totalWeightedPrice = 0.0;
+   double totalVolume        = 0.0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            double vol   = PositionGetDouble(POSITION_VOLUME);
+            double price = PositionGetDouble(POSITION_PRICE_OPEN);
+            totalWeightedPrice += (price * vol);
+            totalVolume        += vol;
+         }
+      }
+   }
+
+   return (totalVolume > 0.0) ? (totalWeightedPrice / totalVolume) : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Close All Standard Positions of Type (With Retry)                |
 //+------------------------------------------------------------------+
 void CloseAllPositions(ENUM_POSITION_TYPE type)
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   int attempts = 0;
+   while(CountPositions(type) > 0 && attempts < 5)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
+      attempts++;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
-         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
-            PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         ulong ticket = PositionGetTicket(i);
+         if(PositionSelectByTicket(ticket))
          {
-            m_trade.PositionClose(ticket);
-         }
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Get Last Opened Position Price                                   |
-//+------------------------------------------------------------------+
-double GetLastPositionPrice(ENUM_POSITION_TYPE type)
-{
-   double price = 0;
-   datetime lastTime = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
-      {
-         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
-            PositionGetInteger(POSITION_TYPE) == type &&
-            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-         {
-            datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
-            if(posTime > lastTime)
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+               PositionGetInteger(POSITION_TYPE) == type &&
+               PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
             {
-               lastTime = posTime;
-               price = PositionGetDouble(POSITION_PRICE_OPEN);
+               m_trade.PositionClose(ticket);
             }
          }
       }
+      if(CountPositions(type) > 0)
+         Sleep(100);
    }
-   return price;
 }
 
 //+------------------------------------------------------------------+
-//| Get Last Opened Position Lot Size                                |
+//| Close All Hedge Positions of Type (With Retry)                   |
 //+------------------------------------------------------------------+
-double GetLastPositionLot(ENUM_POSITION_TYPE type)
+void CloseHedgePositions(ENUM_POSITION_TYPE type)
 {
-   double lot = 0;
-   datetime lastTime = 0;
+   int attempts = 0;
+   while(CountHedgePositions(type) > 0 && attempts < 5)
+   {
+      attempts++;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(PositionSelectByTicket(ticket))
+         {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+               PositionGetInteger(POSITION_TYPE) == type &&
+               PositionGetInteger(POSITION_MAGIC) == m_hedge_magic)
+            {
+               m_trade.PositionClose(ticket);
+            }
+         }
+      }
+      if(CountHedgePositions(type) > 0)
+         Sleep(100);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get Lowest Open Price Among Positions                            |
+//+------------------------------------------------------------------+
+double GetLowestPositionPrice(ENUM_POSITION_TYPE type)
+{
+   double minPrice = DBL_MAX;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -490,10 +922,59 @@ double GetLastPositionLot(ENUM_POSITION_TYPE type)
             PositionGetInteger(POSITION_TYPE) == type &&
             PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
-            datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
-            if(posTime > lastTime)
+            double price = PositionGetDouble(POSITION_PRICE_OPEN);
+            if(price < minPrice)
+               minPrice = price;
+         }
+      }
+   }
+   return (minPrice == DBL_MAX) ? 0.0 : minPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Get Highest Open Price Among Positions                           |
+//+------------------------------------------------------------------+
+double GetHighestPositionPrice(ENUM_POSITION_TYPE type)
+{
+   double maxPrice = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            double price = PositionGetDouble(POSITION_PRICE_OPEN);
+            if(price > maxPrice)
+               maxPrice = price;
+         }
+      }
+   }
+   return maxPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Get Last Opened Position Lot Size (Using millisecond timestamp)  |
+//+------------------------------------------------------------------+
+double GetLastPositionLot(ENUM_POSITION_TYPE type)
+{
+   double lot = 0.0;
+   ulong lastTimeMsc = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_TYPE) == type &&
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            ulong posTimeMsc = (ulong)PositionGetInteger(POSITION_TIME_MSC);
+            if(posTimeMsc >= lastTimeMsc)
             {
-               lastTime = posTime;
+               lastTimeMsc = posTimeMsc;
                lot = PositionGetDouble(POSITION_VOLUME);
             }
          }
@@ -503,26 +984,20 @@ double GetLastPositionLot(ENUM_POSITION_TYPE type)
 }
 
 //+------------------------------------------------------------------+
-//| Open New Position                                                |
+//| Open Standard Grid Position                                      |
 //+------------------------------------------------------------------+
 bool OpenPosition(ENUM_POSITION_TYPE type, double lots)
 {
+   lots = NormalizeLot(lots);
    double price = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   
-   //--- Normalize lots
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   
-   lots = MathFloor(lots / lotStep) * lotStep;
-   if(lots < minLot) lots = minLot;
-   if(lots > maxLot) lots = maxLot;
+
+   m_trade.SetExpertMagicNumber(InpMagicNumber);
 
    if(type == POSITION_TYPE_BUY)
    {
       if(!m_trade.Buy(lots, _Symbol, price, 0, 0, "MACD Grid Buy"))
       {
-         Print("Buy error: ", m_trade.ResultRetcodeDescription());
+         PrintFormat("Buy error: %s (Code: %u)", m_trade.ResultRetcodeDescription(), m_trade.ResultRetcode());
          return false;
       }
    }
@@ -530,9 +1005,39 @@ bool OpenPosition(ENUM_POSITION_TYPE type, double lots)
    {
       if(!m_trade.Sell(lots, _Symbol, price, 0, 0, "MACD Grid Sell"))
       {
-         Print("Sell error: ", m_trade.ResultRetcodeDescription());
+         PrintFormat("Sell error: %s (Code: %u)", m_trade.ResultRetcodeDescription(), m_trade.ResultRetcode());
          return false;
       }
    }
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Open Smart Hedge Follow Position                                 |
+//+------------------------------------------------------------------+
+bool OpenHedgePosition(ENUM_POSITION_TYPE type, double lots)
+{
+   lots = NormalizeLot(lots);
+   double price = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   m_trade.SetExpertMagicNumber(m_hedge_magic);
+
+   bool success = false;
+   if(type == POSITION_TYPE_BUY)
+   {
+      success = m_trade.Buy(lots, _Symbol, price, 0, 0, "MACD Hedge Buy");
+   }
+   else
+   {
+      success = m_trade.Sell(lots, _Symbol, price, 0, 0, "MACD Hedge Sell");
+   }
+
+   if(!success)
+   {
+      PrintFormat("Hedge order error: %s (Code: %u)", m_trade.ResultRetcodeDescription(), m_trade.ResultRetcode());
+   }
+
+   // Restore standard magic number
+   m_trade.SetExpertMagicNumber(InpMagicNumber);
+   return success;
 }
