@@ -152,39 +152,53 @@ flowchart TD
 
 ---
 
-## 🪙 Zerith XAU Scalping EA (Pure One-Shot Momentum Breakout Engine - v18.00)
+## 🪙 Zerith XAU Scalping EA (Pure One-Shot Breakout Engine with Decision Matrix - v18.00)
 
-A streamlined, high-speed algorithmic breakout scalper engineered specifically for **XAUUSD (Gold)** on MetaTrader 5. Built for traders seeking disciplined **One-Shot** execution without dangerous Martingale, Grid, or Averaging-Down schemes.
+A streamlined, high-speed algorithmic breakout scalper engineered specifically for **XAUUSD (Gold)** on MetaTrader 5. Built for disciplined **One-Shot** execution (zero Martingale, zero DCA Grid) while retaining the full multi-timeframe Decision Matrix, Choppy Trend Filter, HTF Trend Confluence, and AI Performance Confirmation.
 
 ```mermaid
 flowchart TD
-    A[M1 Market Ingestion\nEMA Fast/Slow, MACD Histogram, ATR] --> B{Entry Condition\nM1 Trend Alignment & MACD Acceleration?}
-    B -- No --> Z[Wait Next Tick/Bar]
-    B -- Yes --> C{HTF & Volatility Filters\nH1 ADX & Min ATR Threshold?}
-    C -- No --> Z
-    C -- Yes --> D[Execute One-Shot Market Order\nInitial Lot Size]
-    D --> E[Single Position Tracking]
-    E --> F{Dynamic ATR Take Profit\nInpTpPointsBase + ATR Multiplier}
-    E --> G{Ticket SL & Hard USD SL\nStrict Risk Cap}
-    E --> H{Real-Time Trailing Stop\nProfit Lock & Trailing Step}
+    A[Multi-TF Market Ingestion\nM1, M5, M15, H1, H4 Cached Bars] --> B[Market Regime Engine\nVOLATILE | CHOPPY | TREND_STRONG | RANGE | NORMAL]
+    B --> C{Choppy Filter\nM15 vs H1 Trend Conflict?}
+    C -- Yes --> Z[HALT / Stay Out]
+    C -- No --> D{Breakout Setup\nVolatile Spike or Strong Trend Momentum?}
+    D -- No --> Z
+    D -- Yes --> E{HTF & Macro Guards\nH1/H4 Trend Confluence?}
+    E -- No --> Z
+    E -- Yes --> F{AI Performance Gate\nBreakout Score Conf >= 60%?}
+    F -- No --> Z
+    F -- Yes --> G[Execute One-Shot Market Order\nStrictly 1 Active Trade]
+    G --> H[Dynamic ATR TP\nInpTpPointsBase + ATR Multiplier]
+    G --> I[Dual Stop-Loss\nTicket SL Points + Hard USD Emergency SL]
+    G --> J[Real-Time Trailing Stop\nActivation Trigger + Trailing Callback Step]
 ```
 
 ### Core Strategy Mechanics:
-1. **Pure Momentum Breakout Logic**:
-   - **Trend Alignment:** M1 Fast EMA (20) crosses / stays above Slow EMA (50), with Bar Close above Fast EMA for BUY (and vice versa for SELL).
-   - **Momentum Acceleration:** Evaluates M1 MACD Histogram ($12, 26, 9$) expansion ($\text{Hist} > 0$ and $\text{Hist}_0 > \text{Hist}_1$) to confirm buying velocity before market entry.
-2. **Precision Execution & Volatility Filter**:
-   - **Volatility Floor:** Only opens trades when M1 ATR exceeds minimum volatility (`InpMinAtrPoints = 50.0`), filtering out quiet dead sessions.
-   - **Optional HTF Trend Filter:** Can enforce H1 directional alignment and ADX trend strength (`InpUseHtfFilter = false` by default for high-frequency scalping).
-3. **Strict One-Shot Discipline (No Grid / No Martingale)**:
-   - Completely strips out multi-layer recovery, Martingale multipliers, DCA grids, and averaging.
-   - Operates strictly with **one active trade at a time**.
-4. **Dynamic Take-Profit, Hard Stop-Loss & Trailing Stop**:
-   - **Dynamic ATR TP:** Adapts target distance to current market volatility ($\text{TP} = \text{Base} + \text{ATR} \times \text{Multiplier}$).
-   - **Dual SL Architecture:** Employs broker-side ticket Stop-Loss in points (`InpStopLossPoints = 300`) plus an emergency hard USD Stop-Loss (`InpStopLossUsd = $5.0`).
-   - **Real-Time Trailing Stop Engine:** Tracks high-water mark profit; triggers trailing protection once target profit is reached (`InpTrailingTriggerUsd = $2.0`) and steps up (`InpTrailingStepUsd = $1.0`).
-5. **Enhanced HUD Dashboard (v18.00)**:
-   - Modernized 2-column on-chart visual display providing live status on position metrics, trailing peak profit, session P&L, win rate, profit factor, and real-time risk guards.
+1. **Multi-Timeframe Market Regime Engine**:
+   - Analyzes real-time structure across 5 timeframes (M1, M5, M15, H1, H4) using ultra-fast bar caching.
+   - Evaluates volatility (M1 ATR vs M5 ATR ratio, `InpVolatilityAtrPts`), directional trend alignment, and ADX momentum.
+2. **Choppy Market Filter (Trend Conflict Protection)**:
+   - Evaluates M15 vs H1 directional trends: if M15 is UP while H1 is DOWN (or vice versa), market regime is flagged as **CHOPPY**.
+   - Trading is immediately halted during choppy conditions to protect against whipsaws and false breakout traps.
+3. **Pure Momentum Breakout Execution**:
+   - **Volatile Regime:** Enters when M1 Fast EMA (20) confirms trend over Slow EMA (50) and MACD Histogram accelerates in trade direction.
+   - **Strong Trend Regime:** Enters trend-aligned breakouts when H1 ADX > `InpTrendAdx` and M1 aligns with the established macro trend.
+   - **Other Strategy Logics Removed:** Mean Reversion and Pullback logic are cleanly excised; only high-conviction Breakout is executed.
+4. **HTF Trend & Macro Confirmation**:
+   - Optional strict H1 trend filter (`InpUseHtfFilter`).
+   - Macro H4 guard prevents counter-trend breakout entries during strong opposing HTF movements.
+5. **AI Performance Confidence Gating**:
+   - Tracks rolling 30-trade win rate specifically for Breakout (`g_scoreBreakout`).
+   - Dynamically scales trade confidence; automatically gates (pauses) new entries if strategy confidence drops below 60%.
+6. **Strict One-Shot Discipline (No Grid / No Martingale)**:
+   - 100% stripped of multi-layer recovery, Martingale multipliers, DCA grids, and averaging.
+   - Strictly holds **one active position at a time**.
+7. **Dynamic Take-Profit, Dual Stop-Loss & Trailing Stop**:
+   - **Dynamic ATR TP:** Target adapts to market volatility ($\text{TP} = \text{Base} + \text{ATR} \times \text{Multiplier}$).
+   - **Dual SL Architecture:** Broker-side ticket SL (`InpStopLossPoints = 300`) + emergency hard USD stop (`InpStopLossUsd = $5.0`).
+   - **Real-Time Trailing Stop:** Tracks high-water mark profit; triggers trailing protection once target profit is reached (`InpTrailingTriggerUsd = $2.0`) and steps up (`InpTrailingStepUsd = $1.0`).
+8. **Comprehensive HUD Dashboard (v18.00)**:
+   - Full 2-column display: Live Account metrics, Decision Matrix & Regime, S/R levels, Active Position details, Breakout AI Score bar, Multi-TF Confluence matrix (M1-H4), Statistics, and Risk Limit status.
 
 
 ---
