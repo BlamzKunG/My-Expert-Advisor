@@ -24,7 +24,8 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_Oneshot.mq5
 │   ├── Zerith_SBR_Liquidity_Sweep_EA.mq5
 │   ├── Zerith_Supertrend_MultiStrategy_EA.mq5
-│   └── Zerith_XAU_Scalping_EA.mq5
+│   ├── Zerith_XAU_Scalping_EA.mq5
+│   └── Zerith_XAU_SwingGrid_Recovery_EA.mq5
 ├── Indicators/                   # Custom Indicators (Pine Script / MQL5)
 │   ├── Zerith_Supertrend_DeMarker_Signal.pine
 │   └── Zerith_Supertrend_StochRSI_Signal.pine
@@ -67,6 +68,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 | [`Experts/Zerith_MACD_Martingale_Grid_EA.mq5`](Experts/Zerith_MACD_Martingale_Grid_EA.mq5) | Trend Momentum Grid / Multi-Asset | MACD Zero-Cross Trend Following Grid |
 | [`Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5`](Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | H4 Multi-Timeframe Ichimoku Kinko Hyo Cloud Breakout |
 | [`Experts/Zerith_XAU_Scalping_EA.mq5`](Experts/Zerith_XAU_Scalping_EA.mq5) | One-Shot Breakout Engine / XAUUSD | Pure M1 Momentum Breakout Scalper with Dynamic ATR Take-Profit, Ticket/Hard USD Stop-Loss & Real-Time Trailing Stop (Zero Grid/Martingale) |
+| [`Experts/Zerith_XAU_SwingGrid_Recovery_EA.mq5`](Experts/Zerith_XAU_SwingGrid_Recovery_EA.mq5) | Daily Swing & ATR Grid Recovery / XAUUSD | Breakout Entry with Dynamic Yesterday-Swing/10 + Multi-TF ATR Grid Spacing, Anti-Martingale Deep Lots & Basket Trailing |
 | [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | Webhook / Telegram Signal Execution Engine |
 
 ### Indicators (TradingView / Pine Script)
@@ -200,6 +202,46 @@ flowchart TD
 8. **Comprehensive HUD Dashboard (v18.00)**:
    - Full 2-column display: Live Account metrics, Decision Matrix & Regime, S/R levels, Active Position details, Breakout AI Score bar, Multi-TF Confluence matrix (M1-H4), Statistics, and Risk Limit status.
 
+
+---
+
+## 🌪️ Zerith XAU SwingGrid Recovery EA (Dynamic Daily Swing + Multi-TF ATR Spacing)
+
+A state-of-the-art algorithmic recovery engine engineered specifically for **XAUUSD (Gold)** on MetaTrader 5. It replaces rigid static grid distances with a daily market-adaptive spacing formula: **(Yesterday's Daily Swing / 10) + Configurable Multi-TF ATR**, combined with an Anti-Martingale deep lot recovery model, unified basket trailing stops, and staged partial closes.
+
+```mermaid
+flowchart TD
+    A[Daily Ingestion\nYesterday D1 High - Low Swing] --> B[Dynamic Grid Formula\nGap = YesterdaySwing/10 + ATR(TF) * Mult]
+    C[M1 Breakout Engine\nEMA20/50 + MACD Alignment] --> D{Initial Entry Trigger\nConfidence >= 60% & Spread OK?}
+    D -- No --> Z[Wait Next Bar]
+    D -- Yes --> E[Execute Initial Position\nLayer 1: Base Lot]
+    E --> F{Market Advances to TP?}
+    F -- Yes --> G[Unified Basket ATR TP / Basket Trailing]
+    F -- No --> H{Price Adverse Move >= Dynamic Grid Gap?}
+    H -- Yes --> I[S/R Snapping & Momentum Check\nWait for Rejection Confirmation]
+    I --> J[Open Recovery Layer n+1\nAdaptive Lot: Early 1.3x -> Mid 1.5x -> Deep >=6: 0.8x]
+    J --> K[Update Unified Basket TP & Trailing Stop]
+    K --> L{Staged Partial Close or Breakeven Exit?}
+    L -- Yes --> M[De-risk Floating Exposure / Escape at Breakeven]
+```
+
+### Core Strategy Mechanics:
+1. **Dynamic Daily Swing + ATR Grid Spacing**:
+   - **Yesterday's Swing Part:** Measures the complete high-to-low range of yesterday's D1 candle ($\text{High}_{\text{D1}} - \text{Low}_{\text{D1}}$) and divides by a configurable divisor (`InpSwingDivisor = 10.0`).
+   - **Configurable ATR Part:** Adds real-time volatility from a user-specified timeframe and period (`InpGridAtrTf = PERIOD_H1`, `InpGridAtrPeriod = 14`, `InpGridAtrMult = 1.0`).
+   - **Progressive Layer Expansion:** Expands spacing at deeper layers (`+10% per layer`) to provide exponentially wider breathing room against strong sustained trends.
+2. **Support & Resistance Level Snapping**:
+   - Detects major H1 S/R swing levels; automatically snaps pending recovery entries to institutional reaction zones if within $50\%$ of the dynamic gap.
+3. **Anti-Martingale Deep Layer Lot Sizing**:
+   - Avoids toxic exponential martingales: early layers step up moderately ($1.3\times \rightarrow 1.5\times$), while deep layers ($\ge 6$) **drop below 1.0x ($0.8\times$)** to prevent margin exhaustion during extended moves.
+4. **Comprehensive Capital & Risk Protections**:
+   - **Unified Basket ATR TP:** Dynamic profit target adapting to current volatility.
+   - **Basket USD Trailing Stop:** Protects floating basket profits in real time ($5 trigger / $2 trail).
+   - **Staged Partial Close:** Takes partial profits ($30\%$) off winning layers when in recovery.
+   - **Breakeven Escape:** Automatically exits at breakeven ($\ge \$0.00$) once deep adverse excursions recover.
+   - **Hard USD Basket Stop-Loss & Max Holding Hours:** Maximum loss cap and time-based basket liquidation.
+5. **Interactive 2-Column HUD Dashboard**:
+   - Displays live metrics for Yesterday's Swing, Daily Grid Spacing, Configurable ATR, Active Basket layers, Average-to-TP prices, Next recovery lot, and Prop-Firm risk limits.
 
 ---
 
