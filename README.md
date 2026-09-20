@@ -236,7 +236,7 @@ flowchart TD
 3. **Anti-Martingale Deep Layer Lot Sizing**:
    - Avoids toxic exponential martingales: early layers step up moderately ($1.3\times \rightarrow 1.5\times$), while deep layers ($\ge 6$) **drop below 1.0x ($0.8\times$)** to prevent margin exhaustion during extended moves.
 4. **Comprehensive Capital & Risk Protections**:
-   - **Unified Basket ATR TP:** Dynamic profit target adapting to current volatility.
+   - **Unified Basket ATR TP (ปิดรวบ):** Dynamic profit target adapting to current volatility; closes all active basket layers simultaneously when target is reached.
    - **Basket USD Trailing Stop:** Protects floating basket profits in real time ($5 trigger / $2 trail).
    - **Staged Partial Close:** Takes partial profits ($30\%$) off winning layers when in recovery.
    - **Breakeven Escape:** Automatically exits at breakeven ($\ge \$0.00$) once deep adverse excursions recover.

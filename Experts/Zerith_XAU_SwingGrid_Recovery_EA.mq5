@@ -297,6 +297,7 @@ double BasketProfit(int direction);
 datetime BasketOldestTime(int direction);
 int    BasketCalcTpPoints(int direction, int n);
 double BasketTargetPrice(int direction);
+double GetBasketFinalTarget(int direction);
 double NextRecoveryLot(int direction); 
 void   CloseAllPositions(const string reason);
 void   CloseBasket(int direction, const string reason);
@@ -1103,6 +1104,32 @@ double BasketTargetPrice(int direction)
    return NormPrice(raw_target);
 }
 
+double GetBasketFinalTarget(int direction)
+{
+   int n = BasketCount(direction);
+   if(n == 0) return 0.0;
+   double target = NormPrice(BasketTargetPrice(direction));
+   if(target <= 0.0) return 0.0;
+   if(n <= 1) return target;
+
+   double avg     = BasketAvgPrice(direction);
+   double bpnl    = BasketProfit(direction);
+   double tp_dist = MathAbs(target - avg);
+
+   if(bpnl > 0.0 && tp_dist > 0.0)
+   {
+      double cur_price = (direction==0) ? g_sym.Bid() : g_sym.Ask();
+      double progress  = (direction==0) ? (cur_price - avg) : (avg - cur_price);
+      if(progress > tp_dist * 0.50)
+      {
+         double lock_px = tp_dist * 0.60;
+         double buffer_px = InpBreakevenBufferPts * g_point * g_pointFactor;
+         return NormPrice((direction==0) ? avg + lock_px + buffer_px : avg - lock_px - buffer_px);
+      }
+   }
+   return target;
+}
+
 //=====================================================================
 // ADAPTIVE LOT SIZING
 //=====================================================================
@@ -1159,13 +1186,22 @@ void CloseBasket(int direction, const string reason)
 {
    PrintFmt(StringFormat("CloseBasket %s: %s", direction==0?"BUY":"SELL", reason));
    double basketPl = BasketProfit(direction);
-   for(int i=PositionsTotal()-1;i>=0;i--)
+   for(int attempt=0; attempt<3; attempt++)
    {
-      if(!g_pos.SelectByIndex(i)) continue;
-      if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-      if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
-      if(!g_trade.PositionClose(g_pos.Ticket(), InpDeviation))
-         PrintFmt(StringFormat("CloseBasket fail #%llu err=%d", g_pos.Ticket(), GetLastError()));
+      bool any_remaining = false;
+      for(int i=PositionsTotal()-1; i>=0; i--)
+      {
+         if(!g_pos.SelectByIndex(i)) continue;
+         if(g_pos.Symbol()!=Symbol() || g_pos.Magic()!=(ulong)InpMagic) continue;
+         if((g_pos.PositionType()==POSITION_TYPE_BUY ? 0 : 1) != direction) continue;
+         if(!g_trade.PositionClose(g_pos.Ticket(), InpDeviation))
+         {
+            PrintFmt(StringFormat("CloseBasket fail #%llu err=%d (attempt %d)", g_pos.Ticket(), GetLastError(), attempt+1));
+            any_remaining = true;
+         }
+      }
+      if(!any_remaining) break;
+      Sleep(50);
    }
    FinaliseBasket(direction);
    UpdateBasketCache();
@@ -1197,6 +1233,24 @@ void ManageBasketRisk(int direction)
    if(n == 0) return;
 
    double basket_pl = BasketProfit(direction);
+
+   // [BASKET TAKE-PROFIT EXIT (ปิดรวบ) FOR n >= 2]
+   if(n >= 2)
+   {
+      double final_target = GetBasketFinalTarget(direction);
+      if(final_target > 0.0)
+      {
+         double cur_px = (direction==0) ? g_sym.Bid() : g_sym.Ask();
+         bool reached  = (direction==0) ? (cur_px >= final_target) : (cur_px <= final_target);
+         if(reached && basket_pl >= 0.0)
+         {
+            PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f BasketPL=$%.2f — Closing all layers (ปิดรวบ)",
+                     direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, final_target, basket_pl));
+            CloseBasket(direction, StringFormat("Basket TP reached pl=%.2f", basket_pl));
+            return;
+         }
+      }
+   }
 
    if(InpUseBasketStopLoss && basket_pl <= -InpMaxBasketLossUsd)
    {
@@ -1463,12 +1517,13 @@ void ManageRecovery(TFView &views[], bool &viewsOk[])
       if(InpUseMinFreeMarginPct && eq_r > 0 && fm/eq_r*100.0 < InpMinFreeMarginPct) continue;
 
       double lot   = NextRecoveryLot(direction);
-      double tp_px = NormPrice(BasketTargetPrice(direction));
       string cmt   = StringFormat("ZXREC_%s_%d", direction==0?"BUY":"SELL", n+1);
 
+      // In Basket Recovery (n >= 2), orders are opened with TP=0.0 so the broker cannot prematurely close
+      // a single layer alone. The entire basket is closed simultaneously (ปิดรวบ) by the EA at final_target.
       bool ok = false;
-      if(direction==0) ok = g_trade.Buy (lot, Symbol(), 0.0, 0.0, tp_px, cmt);
-      else             ok = g_trade.Sell(lot, Symbol(), 0.0, 0.0, tp_px, cmt);
+      if(direction==0) ok = g_trade.Buy (lot, Symbol(), 0.0, 0.0, 0.0, cmt);
+      else             ok = g_trade.Sell(lot, Symbol(), 0.0, 0.0, 0.0, cmt);
 
       if(ok) {
          if(direction==0) g_lastRecBuy=TimeCurrent(); else g_lastRecSell=TimeCurrent();
@@ -1490,53 +1545,50 @@ void UpdateBasketTPs()
    {
       int n = g_bStats[direction].count;
       if(n == 0) continue;
-      double target = NormPrice(BasketTargetPrice(direction));
-      if(target <= 0.0) continue;
-      double avg    = BasketAvgPrice(direction);
-      double bpnl   = BasketProfit(direction);
-      double tp_dist = MathAbs(target - avg);
 
-      bool   be_trail  = false;
-      double be_target = target;
-      
-      if(n > 1 && bpnl > 0.0 && tp_dist > 0.0)
+      double final_target = GetBasketFinalTarget(direction);
+      if(final_target <= 0.0) continue;
+
+      if(n >= 2)
       {
-         double cur_price = (direction==0)
-                            ? SymbolInfoDouble(Symbol(),SYMBOL_BID)
-                            : SymbolInfoDouble(Symbol(),SYMBOL_ASK);
-         double progress = (direction==0) ? (cur_price-avg) : (avg-cur_price);
-         if(progress > tp_dist * 0.50)
+         // 1. Check if price already reached target with positive profit (instant basket close)
+         double cur_px = (direction==0) ? g_sym.Bid() : g_sym.Ask();
+         double bpnl   = BasketProfit(direction);
+         bool reached  = (direction==0) ? (cur_px >= final_target) : (cur_px <= final_target);
+         if(reached && bpnl >= 0.0)
          {
-            double lock_px = tp_dist * 0.60;
-            double buffer_px = InpBreakevenBufferPts * g_point * g_pointFactor;
-            be_target = NormPrice((direction==0) ? avg + lock_px + buffer_px : avg - lock_px - buffer_px);
-            be_trail  = true;
+            PrintFmt(StringFormat("BASKET TP REACHED %s: n=%d Px=%.*f Target=%.*f Profit=$%.2f — Closing all layers (ปิดรวบ)",
+                     direction==0?"BUY":"SELL", n, g_digits, cur_px, g_digits, final_target, bpnl));
+            CloseBasket(direction, StringFormat("Basket TP reached pl=%.2f", bpnl));
+            continue;
+         }
+
+         // 2. Clear broker-side TP on all individual positions so the broker cannot close orders separately!
+         for(int i=0; i<PositionsTotal(); i++)
+         {
+            if(!g_pos.SelectByIndex(i)) continue;
+            if(g_pos.Symbol() != Symbol() || g_pos.Magic() != (ulong)InpMagic) continue;
+            if((g_pos.PositionType() == POSITION_TYPE_BUY ? 0 : 1) != direction) continue;
+            if(g_pos.TakeProfit() > 0.0)
+            {
+               g_trade.PositionModify(g_pos.Ticket(), g_pos.StopLoss(), 0.0);
+            }
          }
       }
-
-      double final_target = be_trail ? be_target : target;
-
-      for(int i=0;i<PositionsTotal();i++)
+      else // Single position (n == 1): Maintain broker-side TP on the individual position
       {
-         if(!g_pos.SelectByIndex(i)) continue;
-         if(g_pos.Symbol()!=Symbol()||g_pos.Magic()!=(ulong)InpMagic) continue;
-         if((g_pos.PositionType()==POSITION_TYPE_BUY?0:1)!=direction) continue;
-         double cur_tp = g_pos.TakeProfit();
-         datetime posTime = (datetime)g_pos.Time();
-         bool justOpened = (TimeCurrent() - posTime < 3);
-         bool should_update;
-         if(be_trail)
+         for(int i=0; i<PositionsTotal(); i++)
          {
-            should_update = (direction==0) ? (final_target < cur_tp - one_pt)
-                                           : (final_target > cur_tp + one_pt);
+            if(!g_pos.SelectByIndex(i)) continue;
+            if(g_pos.Symbol() != Symbol() || g_pos.Magic() != (ulong)InpMagic) continue;
+            if((g_pos.PositionType() == POSITION_TYPE_BUY ? 0 : 1) != direction) continue;
+            double cur_tp = g_pos.TakeProfit();
+            datetime posTime = (datetime)g_pos.Time();
+            bool justOpened = (TimeCurrent() - posTime < 3);
+            bool should_update = (MathAbs(final_target - cur_tp) > 2.0 * one_pt) || (cur_tp == 0.0 && final_target > one_pt);
+            if(should_update && !justOpened)
+               g_trade.PositionModify(g_pos.Ticket(), g_pos.StopLoss(), final_target);
          }
-         else
-         {
-            should_update = (MathAbs(final_target - cur_tp) > 2.0 * one_pt);
-            if(cur_tp == 0.0 && MathAbs(final_target) > one_pt) should_update = true;
-         }
-         if(should_update && !justOpened)
-            g_trade.PositionModify(g_pos.Ticket(), g_pos.StopLoss(), final_target);
       }
    }
 }
