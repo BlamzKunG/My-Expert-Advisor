@@ -212,13 +212,13 @@ A state-of-the-art algorithmic recovery engine engineered specifically for **XAU
 ```mermaid
 flowchart TD
     A[Daily Ingestion\nYesterday D1 High - Low Swing] --> B[Dynamic Grid Formula\nGap = YesterdaySwing/10 + ATR(TF) * Mult]
-    C[M1 Breakout Engine\nEMA20/50 + MACD Alignment] --> D{Initial Entry Trigger\nConfidence >= 60% & Spread OK?}
+    C[Multi-Strategy Engine\nTrend, MeanRev, Breakout, Pullback] --> D{Initial Entry Trigger\nConfidence >= 60% & Spread OK?}
     D -- No --> Z[Wait Next Bar]
     D -- Yes --> E[Execute Initial Position\nLayer 1: Base Lot]
     E --> F{Market Advances to TP?}
     F -- Yes --> G[Unified Basket ATR TP / Basket Trailing]
     F -- No --> H{Price Adverse Move >= Dynamic Grid Gap?}
-    H -- Yes --> I[S/R Snapping & Momentum Check\nWait for Rejection Confirmation]
+    H -- Yes --> I[Momentum & HTF Trend Filter Check\nWait for Rejection Confirmation]
     I --> J[Open Recovery Layer n+1\nAdaptive Lot: Early 1.3x -> Mid 1.5x -> Deep >=6: 0.8x]
     J --> K[Update Unified Basket TP & Trailing Stop]
     K --> L{Staged Partial Close or Breakeven Exit?}
@@ -226,12 +226,13 @@ flowchart TD
 ```
 
 ### Core Strategy Mechanics:
-1. **Dynamic Daily Swing + ATR Grid Spacing**:
+1. **100% Faithful to Optimized v17 Base Architecture**:
+   - Retains all 4 strategies (Trend, Mean Reversion, Breakout, Pullback), Decision Matrix, AI Scores, and interactive 2-column HUD Dashboard intact from optimized v17.
+2. **Dynamic Daily Swing + Multi-TF ATR Grid Spacing**:
    - **Yesterday's Swing Part:** Measures the complete high-to-low range of yesterday's D1 candle ($\text{High}_{\text{D1}} - \text{Low}_{\text{D1}}$) and divides by a configurable divisor (`InpSwingDivisor = 10.0`).
    - **Configurable ATR Part:** Adds real-time volatility from a user-specified timeframe and period (`InpGridAtrTf = PERIOD_H1`, `InpGridAtrPeriod = 14`, `InpGridAtrMult = 1.0`).
+   - **Full Gap Protection:** Strict distance requirement $(\text{Yesterday Swing} / 10) + \text{ATR}$; does not prematurely shrink the grid spacing.
    - **Progressive Layer Expansion:** Expands spacing at deeper layers (`+10% per layer`) to provide exponentially wider breathing room against strong sustained trends.
-2. **Support & Resistance Level Snapping**:
-   - Detects major H1 S/R swing levels; automatically snaps pending recovery entries to institutional reaction zones if within $50\%$ of the dynamic gap.
 3. **Anti-Martingale Deep Layer Lot Sizing**:
    - Avoids toxic exponential martingales: early layers step up moderately ($1.3\times \rightarrow 1.5\times$), while deep layers ($\ge 6$) **drop below 1.0x ($0.8\times$)** to prevent margin exhaustion during extended moves.
 4. **Comprehensive Capital & Risk Protections**:
@@ -241,7 +242,7 @@ flowchart TD
    - **Breakeven Escape:** Automatically exits at breakeven ($\ge \$0.00$) once deep adverse excursions recover.
    - **Hard USD Basket Stop-Loss & Max Holding Hours:** Maximum loss cap and time-based basket liquidation.
 5. **Interactive 2-Column HUD Dashboard**:
-   - Displays live metrics for Yesterday's Swing, Daily Grid Spacing, Configurable ATR, Active Basket layers, Average-to-TP prices, Next recovery lot, and Prop-Firm risk limits.
+   - Displays live metrics for Account Equity/DD, Decision Matrix, AI Scores, Multi-TF Confluence (M1-H4), Win Rate, Profit Factor, Active Basket layers, Average-to-TP prices, Next recovery lot, and Prop-Firm risk limits.
 
 ---
 
