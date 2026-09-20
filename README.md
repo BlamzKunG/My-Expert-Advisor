@@ -66,7 +66,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 | [`Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5`](Experts/Zerith_Gold_Adaptive_MeanReversion_EA.mq5) | Mean Reversion Grid / XAUUSD | Adaptive Statistical Mean Reversion on Gold |
 | [`Experts/Zerith_MACD_Martingale_Grid_EA.mq5`](Experts/Zerith_MACD_Martingale_Grid_EA.mq5) | Trend Momentum Grid / Multi-Asset | MACD Zero-Cross Trend Following Grid |
 | [`Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5`](Experts/Zerith_Crypto_Ichimoku_H4_EA.mq5) | Trend Following / Crypto | H4 Multi-Timeframe Ichimoku Kinko Hyo Cloud Breakout |
-| [`Experts/Zerith_XAU_Scalping_EA.mq5`](Experts/Zerith_XAU_Scalping_EA.mq5) | Decision Matrix & Adaptive Recovery / XAUUSD | Multi-Regime Scalping (Pullback, Mean-Rev, Breakout) with Adaptive Multi-Layer Recovery, Deep Anti-Martingale & Basket Trailing |
+| [`Experts/Zerith_XAU_Scalping_EA.mq5`](Experts/Zerith_XAU_Scalping_EA.mq5) | One-Shot Breakout Engine / XAUUSD | Pure M1 Momentum Breakout Scalper with Dynamic ATR Take-Profit, Ticket/Hard USD Stop-Loss & Real-Time Trailing Stop (Zero Grid/Martingale) |
 | [`Experts/HaruuSignalReceiver.mq5`](Experts/HaruuSignalReceiver.mq5) | Signal Receiver / Multi-Asset | Webhook / Telegram Signal Execution Engine |
 
 ### Indicators (TradingView / Pine Script)
@@ -152,46 +152,40 @@ flowchart TD
 
 ---
 
-## 🪙 Zerith XAU Scalping EA (Decision Matrix & Adaptive Multi-Layer Recovery)
+## 🪙 Zerith XAU Scalping EA (Pure One-Shot Momentum Breakout Engine - v18.00)
 
-A multi-regime algorithmic scalper engineered specifically for **XAUUSD (Gold)** on MetaTrader 5, combining a multi-timeframe Decision Matrix, an adaptive self-weighting strategy scoring engine, and an anti-martingale deep recovery grid.
+A streamlined, high-speed algorithmic breakout scalper engineered specifically for **XAUUSD (Gold)** on MetaTrader 5. Built for traders seeking disciplined **One-Shot** execution without dangerous Martingale, Grid, or Averaging-Down schemes.
 
 ```mermaid
 flowchart TD
-    A[Multi-TF Ingestion: M1, M5, M15, H1, H4\nZero Indicator Handles Caching] --> B[Market Regime Engine\nVOLATILE | CHOPPY | TREND_STRONG | RANGE | NORMAL]
-    B --> C{Choppy Filter\nM15 vs H1 Trend Conflict?}
-    C -- Yes --> Z[HALT / Wait Next Bar]
-    C -- No --> D[Signal Generator\nPullback | Mean-Reversion | Breakout]
-    D --> E[Adaptive AI Weighting\nRolling 30-Trade Win Rate Score]
-    E --> F{Confidence >= 60% & Spread OK?}
-    F -- No --> Z
-    F -- Yes --> G[Single-Basket Entry: M1 Execution]
-    G --> H{Adverse Price Move?}
-    H -- No --> I[Unified Basket ATR TP / Trailing Stop]
-    H -- Yes --> J[Adaptive Multi-Layer Recovery\nDynamic Gap + S/R Level Snapping]
-    J --> K[Deep Anti-Martingale Lot Sizing\nEarly 1.3x -> Mid 1.5x -> Deep >=6: 0.8x]
-    K --> L[Staged Partial Close / Breakeven Escape]
+    A[M1 Market Ingestion\nEMA Fast/Slow, MACD Histogram, ATR] --> B{Entry Condition\nM1 Trend Alignment & MACD Acceleration?}
+    B -- No --> Z[Wait Next Tick/Bar]
+    B -- Yes --> C{HTF & Volatility Filters\nH1 ADX & Min ATR Threshold?}
+    C -- No --> Z
+    C -- Yes --> D[Execute One-Shot Market Order\nInitial Lot Size]
+    D --> E[Single Position Tracking]
+    E --> F{Dynamic ATR Take Profit\nInpTpPointsBase + ATR Multiplier}
+    E --> G{Ticket SL & Hard USD SL\nStrict Risk Cap}
+    E --> H{Real-Time Trailing Stop\nProfit Lock & Trailing Step}
 ```
 
 ### Core Strategy Mechanics:
-1. **Market Regime Engine (Decision Matrix)**:
-   - Evaluates volatility (M1/M5 ATR ratio), directional momentum (H1/M15 ADX), and multi-timeframe trend alignment.
-   - Automatically switches between **Pullback** in strong trends, **Mean Reversion** in range/normal conditions, and **Breakout** in volatility spikes. Halts trading entirely during **Choppy** conflicting conditions.
-2. **Adaptive AI Performance Weighting**:
-   - Maintains rolling circular performance buffers (last 30 trades per strategy).
-   - Dynamically scales confidence scores via exponential smoothing: $\text{Score} = 0.7 \times \text{Score}_{\text{prev}} + 0.3 \times \text{WinRate}_{30}$.
-3. **Smart Multi-Layer Recovery & Deep Anti-Martingale**:
-   - **Dynamic Spacing:** Recovery gap adapts to ATR volatility and snaps to key H1 Support/Resistance levels.
-   - **Momentum & HTF Guards:** Rejects counter-trend recovery entries if lower-timeframe momentum is in freefall or higher-timeframe trends (H1+H4) are strongly opposing.
-   - **Anti-Martingale Deep Lots:** Unlike toxic exponential martingales, lot sizes step up moderately ($1.3\times \rightarrow 1.5\times$) then **decrease to $0.8\times$** at deep layers ($\ge 6$) to prevent margin exhaustion.
-4. **Comprehensive Exit & Capital Protection Suite**:
-   - **Unified Basket TP & Trailing Stop:** Dynamic ATR-scaled profit targets with USD-based trailing stops ($5 trigger / $2 trail).
-   - **Staged Partial Close:** Takes partial profits ($30\%$) off winning layers when in recovery to de-risk floating exposure.
-   - **Breakeven Escape:** Automatically exits at breakeven ($\ge \$0.00$) if the basket recovers from significant adverse excursion ($< -\$3.00$).
-   - **Basket Time-Stop & Stop-Loss:** Enforces strict 8-hour maximum basket holding time and hard USD stop loss.
-5. **v17.00 Architecture & State Persistence**:
-   - **Basket-Level Win Rate & Profit Factor:** True basket-level trade tracking resolving asynchronous MT5 deal history latency.
-   - **Full GlobalVariable State Persistence:** Seamless recovery across terminal reboots and connection drops.
+1. **Pure Momentum Breakout Logic**:
+   - **Trend Alignment:** M1 Fast EMA (20) crosses / stays above Slow EMA (50), with Bar Close above Fast EMA for BUY (and vice versa for SELL).
+   - **Momentum Acceleration:** Evaluates M1 MACD Histogram ($12, 26, 9$) expansion ($\text{Hist} > 0$ and $\text{Hist}_0 > \text{Hist}_1$) to confirm buying velocity before market entry.
+2. **Precision Execution & Volatility Filter**:
+   - **Volatility Floor:** Only opens trades when M1 ATR exceeds minimum volatility (`InpMinAtrPoints = 50.0`), filtering out quiet dead sessions.
+   - **Optional HTF Trend Filter:** Can enforce H1 directional alignment and ADX trend strength (`InpUseHtfFilter = false` by default for high-frequency scalping).
+3. **Strict One-Shot Discipline (No Grid / No Martingale)**:
+   - Completely strips out multi-layer recovery, Martingale multipliers, DCA grids, and averaging.
+   - Operates strictly with **one active trade at a time**.
+4. **Dynamic Take-Profit, Hard Stop-Loss & Trailing Stop**:
+   - **Dynamic ATR TP:** Adapts target distance to current market volatility ($\text{TP} = \text{Base} + \text{ATR} \times \text{Multiplier}$).
+   - **Dual SL Architecture:** Employs broker-side ticket Stop-Loss in points (`InpStopLossPoints = 300`) plus an emergency hard USD Stop-Loss (`InpStopLossUsd = $5.0`).
+   - **Real-Time Trailing Stop Engine:** Tracks high-water mark profit; triggers trailing protection once target profit is reached (`InpTrailingTriggerUsd = $2.0`) and steps up (`InpTrailingStepUsd = $1.0`).
+5. **Enhanced HUD Dashboard (v18.00)**:
+   - Modernized 2-column on-chart visual display providing live status on position metrics, trailing peak profit, session P&L, win rate, profit factor, and real-time risk guards.
+
 
 ---
 
