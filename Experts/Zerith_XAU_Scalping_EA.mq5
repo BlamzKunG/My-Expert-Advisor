@@ -649,17 +649,17 @@ void UpdateSRRanges()
 //=====================================================================
 string EvaluateMarketRegime(const TFView &m1, const TFView &m5, const TFView &m15, const TFView &h1)
 {
-   if(m5.atr_val > 0 && m1.atr_val > m5.atr_val * 1.5) return "VOLATILE";
-   if(g_atrM1Pts > InpVolatilityAtrPts) return "VOLATILE";
    if(m15.trend > 0 && h1.trend < 0) return "CHOPPY";
    if(m15.trend < 0 && h1.trend > 0) return "CHOPPY";
+   if(m5.atr_val > 0 && m1.atr_val > m5.atr_val * 1.5) return "VOLATILE";
+   if(g_atrM1Pts > InpVolatilityAtrPts) return "VOLATILE";
    if(h1.adx_val > InpTrendAdx && m15.adx_val > 20 && h1.trend != 0) return "TREND_STRONG";
    if(h1.adx_val < InpRangeAdx) return "RANGE";
    return "NORMAL";
 }
 
 //=====================================================================
-// SIGNAL DECISION (Pure Breakout Strategy + Confirmations)
+// SIGNAL DECISION (Continuous Breakout Engine + Confirmations)
 //=====================================================================
 void DecideSignal(TFView &views[], bool &viewsOk[], Signal &out)
 {
@@ -675,61 +675,61 @@ void DecideSignal(TFView &views[], bool &viewsOk[], Signal &out)
       return;
    }
 
-   // 2. BREAKOUT SIGNAL EVALUATION
-   bool isVolatile    = (g_regime == "VOLATILE");
-   bool isTrendStrong = (g_regime == "TREND_STRONG");
+   // 2. CONTINUOUS BREAKOUT EVALUATION (Operates across all market regimes)
+   bool buy_breakout  = (m1.trend > 0 && m1.macd_hist > 0 && m1.macd_hist > m1.macd_hist_prev);
+   bool sell_breakout = (m1.trend < 0 && m1.macd_hist < 0 && m1.macd_hist < m1.macd_hist_prev);
 
-   if(isVolatile)
+   if(buy_breakout)
    {
-      // Momentum Breakout in Volatile Regime
-      if(m1.trend > 0 && m1.macd_hist > 0 && m1.macd_hist > m1.macd_hist_prev)
+      out.action   = "BUY";
+      out.strategy = "BREAKOUT";
+
+      if(g_regime == "VOLATILE")
       {
-         out.action     = "BUY";
-         out.strategy   = "BREAKOUT";
          out.confidence = 0.65;
-         out.reason     = "Volatility M1 BUY Breakout";
+         out.reason     = "Volatile M1 BUY Breakout";
          out.tp_points  = (int)(InpTpPointsBase * 1.2);
       }
-      else if(m1.trend < 0 && m1.macd_hist < 0 && m1.macd_hist < m1.macd_hist_prev)
+      else if(g_regime == "TREND_STRONG")
       {
-         out.action     = "SELL";
-         out.strategy   = "BREAKOUT";
-         out.confidence = 0.65;
-         out.reason     = "Volatility M1 SELL Breakout";
+         out.confidence = (h1.trend > 0) ? 0.70 : 0.60;
+         out.reason     = (h1.trend > 0) ? "Strong Trend H1+M1 BUY Breakout" : "Trend Strong M1 BUY Breakout";
          out.tp_points  = (int)(InpTpPointsBase * 1.2);
       }
-      else
+      else // NORMAL or RANGE
       {
-         out.reason = "Volatile regime - awaiting MACD expansion";
+         out.confidence = 0.60;
+         out.reason     = StringFormat("%s M1 BUY Breakout", g_regime);
+         out.tp_points  = InpTpPointsBase;
       }
    }
-   else if(InpBreakoutInTrendStrong && isTrendStrong)
+   else if(sell_breakout)
    {
-      // Trend-Confirmed Breakout in Strong Trend Regime
-      if(h1.trend > 0 && m1.trend > 0 && m1.macd_hist > 0)
+      out.action   = "SELL";
+      out.strategy = "BREAKOUT";
+
+      if(g_regime == "VOLATILE")
       {
-         out.action     = "BUY";
-         out.strategy   = "BREAKOUT";
-         out.confidence = 0.70;
-         out.reason     = "Strong Trend H1+M1 BUY Breakout";
-         out.tp_points  = (int)(InpTpPointsBase * 1.1);
+         out.confidence = 0.65;
+         out.reason     = "Volatile M1 SELL Breakout";
+         out.tp_points  = (int)(InpTpPointsBase * 1.2);
       }
-      else if(h1.trend < 0 && m1.trend < 0 && m1.macd_hist < 0)
+      else if(g_regime == "TREND_STRONG")
       {
-         out.action     = "SELL";
-         out.strategy   = "BREAKOUT";
-         out.confidence = 0.70;
-         out.reason     = "Strong Trend H1+M1 SELL Breakout";
-         out.tp_points  = (int)(InpTpPointsBase * 1.1);
+         out.confidence = (h1.trend < 0) ? 0.70 : 0.60;
+         out.reason     = (h1.trend < 0) ? "Strong Trend H1+M1 SELL Breakout" : "Trend Strong M1 SELL Breakout";
+         out.tp_points  = (int)(InpTpPointsBase * 1.2);
       }
-      else
+      else // NORMAL or RANGE
       {
-         out.reason = "Strong trend - awaiting M1 alignment";
+         out.confidence = 0.60;
+         out.reason     = StringFormat("%s M1 SELL Breakout", g_regime);
+         out.tp_points  = InpTpPointsBase;
       }
    }
    else
    {
-      out.reason = StringFormat("%s regime - waiting for Breakout setup", g_regime);
+      out.reason = "Awaiting M1 Breakout (EMA trend + MACD expansion)";
    }
 
    if(out.action == "WAIT") return;
