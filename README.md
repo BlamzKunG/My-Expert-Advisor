@@ -17,6 +17,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 │   ├── Zerith_Crypto_Ichimoku_H4_EA.mq5
 │   ├── Zerith_Gold_Adaptive_MeanReversion_EA.mq5
 │   ├── Zerith_Gold_Advanced_Grid_EA.mq5
+│   ├── Zerith_Gold_MultiZone_Breakout_EA.mq5
 │   ├── Zerith_Gold_Trade_Pro_EA.mq5
 │   ├── Zerith_London_Breakout_Recovery_EA.mq5
 │   ├── Zerith_MACD_Martingale_Grid_EA.mq5
@@ -57,6 +58,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors (Zerith Series)
 | File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
+| [`Experts/Zerith_Gold_MultiZone_Breakout_EA.mq5`](Experts/Zerith_Gold_MultiZone_Breakout_EA.mq5) | Multi-Zone Structural Swing Breakout / XAUUSD | 6 Autonomous H1 Market Structure Breakout Modules with Dynamic Daily Price Scaling, Multi-Tier BE/Trailing & Prop DD Guard |
 | [`Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5`](Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5) | Smart Money Concepts (SMC) / Gold & FX | Multi-Timeframe SBR/RBS Flip Zones with LTF Liquidity Sweep & Classic A/V Reversal Trigger |
 | [`Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5`](Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5) | High-Impact News Straddle / Gold & FX | News Straddle Breakout EA with Opposite Stop Order Trailing SL, Automated Reversal Flip, and Capital Protection |
 | [`Experts/Zerith_Gold_Trade_Pro_EA.mq5`](Experts/Zerith_Gold_Trade_Pro_EA.mq5) | Daily Support/Resistance Breakout / XAUUSD | 7 Daily Breakout Modules with Multi-Stage Trailing Stop & Drawdown Protection |
@@ -243,6 +245,36 @@ flowchart TD
    - **Hard USD Basket Stop-Loss & Max Holding Hours:** Maximum loss cap and time-based basket liquidation.
 5. **Interactive 2-Column HUD Dashboard**:
    - Displays live metrics for Account Equity/DD, Decision Matrix, AI Scores, Multi-TF Confluence (M1-H4), Win Rate, Profit Factor, Active Basket layers, Average-to-TP prices, Next recovery lot, and Prop-Firm risk limits.
+
+---
+
+## ⚡ Zerith Gold Multi-Zone Breakout EA (H1 Structural Swing Breakout)
+
+Designed specifically for **XAUUSD (Gold)** on the **H1 Timeframe**, featuring 6 autonomous breakout engines operating across distinct trading windows with dynamic volatility-scaled profit targets.
+
+### Core Architecture & Mechanics:
+1. **Multi-Zone Swing Pivot Detection (Non-Repainting)**:
+   - Identifies key structural Swing Highs and Swing Lows on H1 bars using left/right pivot confirmation windows.
+   - Places pending **Buy Stop** orders above swing highs and **Sell Stop** orders below swing lows.
+   - Zero market chasing: entries only trigger on explosive structural breaks.
+2. **6 Autonomous Breakout Zones**:
+   - **Zone A1 (Magic `Base + 9`)**: H1 Base Breakout (26R / 24L pivots, 120 pts buffer, 824 pts base TP). Active in London, Overlap, and New York.
+   - **Zone A2 (Magic `Base + 14`)**: H1 Base Breakout (25R / 23L pivots, 10 pts buffer, 1522.5 pts base TP). Active in London and Overlap.
+   - **Zone A3 (Magic `Base + 15`)**: H1 Base Breakout (26R / 20L pivots, 80 pts buffer, 1284 pts base TP). Multi-session coverage.
+   - **Zone B1 (Magic `Base + 13`)**: H1 Mid Breakout (7R / 5L pivots, 40 pts buffer, 1485 pts base TP). Active across all sessions except Wednesdays.
+   - **Zone B2 (Magic `Base + 12`)**: H1 Mid Breakout (30R / 19L pivots, 160 pts buffer, 927 pts base TP). Broad active window.
+   - **Zone B3 (Magic `Base + 8`)**: H1 Macro Swing Breakout (7R / 2L pivots, 250 pts buffer, 3630 pts base TP). Macro expansion target.
+3. **Dynamic Daily Price Scaling (Auto-Volatility Adaptation)**:
+   - TP distance dynamically adapts to prevailing gold prices relative to historical baseline open prices (`prev_daily_open / scale_base`).
+   - Higher price regimes automatically expand target distances to maintain mathematical risk-reward consistency.
+4. **Multi-Tier Trailing Stop & Breakeven Lock**:
+   - **Tier 1 (BE Profit Lock):** Locks in +10 points as soon as profit reaches the dynamic trigger threshold ($110 \times \text{scale}$).
+   - **Tier 2 (Lock Distance):** Ensures minimum protected gain of $30 \times \text{scale}$ points.
+   - **Tier 3 (Dynamic Trail):** Continually trails behind spot prices at $121 \times \text{scale}$ points.
+5. **Prop Firm & Capital Protection Guard**:
+   - Hard Stop Loss (default 3000 points / $30 on Gold).
+   - Real-time Daily Drawdown Monitor: closes all active positions and cancels pending orders if daily drawdown exceeds `InpMaxDailyDDPercent` (default 4.0%).
+   - Integrated offline US Non-Farm Payrolls (NFP) calendar filter.
 
 ---
 
