@@ -5,10 +5,11 @@
 //+------------------------------------------------------------------+
 #property copyright "Zerith Series / BlamzKunG Architecture"
 #property link      "https://github.com/BlamzKunG/My-Expert-Advisor"
-#property version   "1.00"
+#property version   "1.10"
 #property description "Zerith Machine Learning Raw Candlestick Data Collector EA"
-#property description "High-Performance Batch & On-Demand OHLCV + Spread Historical Exporter for ML/DL Pipelines"
-#property description "Supports Current Chart or Multi-Symbol Batch Export, Date Range or Max Bars, and Unix Timestamp"
+#property description "High-Performance OHLCV + Spread Historical Exporter for ML/DL Pipelines"
+#property description "Supports Live Chart Export & Full Automatic Strategy Tester Backtest Logging"
+#property description "Auto-generates filenames with exact date ranges (e.g. XAUUSD_M5_20220101_to_20230101.csv)"
 #property strict
 
 #include <Trade\SymbolInfo.mqh>
@@ -24,29 +25,48 @@ enum ENUM_EXPORT_MODE
 };
 
 //+------------------------------------------------------------------+
+//| INTERNAL CANDLE RECORD STRUCTURE                                 |
+//+------------------------------------------------------------------+
+struct SCandleRecord
+{
+   datetime time;
+   double   open;
+   double   high;
+   double   low;
+   double   close;
+   long     tick_volume;
+   int      spread;
+   long     real_volume;
+};
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
 input group ">>>> 1. Symbol & Timeframe Selection"
 input bool               InpCurrentChartOnly    = true;                 // Export Current Chart Symbol Only
-input string             InpBatchSymbols        = "XAUUSD,EURUSD,GBPUSD,USDJPY,BTCUSD"; // Multi-Symbols (Comma Separated)
+input string             InpBatchSymbols        = "XAUUSD,EURUSD,GBPUSD,USDJPY,BTCUSD"; // Multi-Symbols (Comma Separated, Live only)
 input bool               InpUseChartTimeframe   = true;                 // Use Current Chart Timeframe
 input ENUM_TIMEFRAMES    InpCustomTimeframe     = PERIOD_M5;            // Custom Timeframe (if not chart TF)
 
-input group ">>>> 2. Range & Export Configuration"
-input ENUM_EXPORT_MODE   InpExportMode          = EXPORT_ALL_AVAILABLE; // History Export Mode
+input group ">>>> 2. Range & Export Configuration (Live Chart)"
+input ENUM_EXPORT_MODE   InpExportMode          = EXPORT_BY_DATE_RANGE; // History Export Mode (for Live Chart)
 input int                InpBarCount            = 50000;                // Number of Bars to Export (if Bar Count Mode)
 input datetime           InpStartDate           = D'2022.01.01 00:00:00';// Start Date (if Date Range Mode)
-input datetime           InpEndDate             = D'2026.12.31 23:59:59';// End Date (if Date Range Mode)
+input datetime           InpEndDate             = D'2023.01.01 00:00:00';// End Date (if Date Range Mode)
 
-input group ">>>> 3. Output CSV Settings"
+input group ">>>> 3. Strategy Tester (Backtest) Settings"
+input bool               InpAutoDetectTester    = true;                 // Auto-Capture Strategy Tester Backtest Range
+input bool               InpSaveToCommonFolder  = true;                 // Also Save to Common/Files (Easy to open!)
+
+input group ">>>> 4. Output CSV Settings"
 input string             InpSubfolder           = "ML_Dataset";         // Subfolder inside MQL5/Files/
 input bool               InpIncludeHeader       = true;                 // Include Header Row in CSV
 input bool               InpIncludeUnixTime     = true;                 // Include Unix Timestamp Column (Epoch)
 input bool               InpSplitDateTime       = true;                 // Split Date and Time into Separate Columns
 input string             InpDelimiter           = ",";                  // CSV Column Delimiter
 
-input group ">>>> 4. Execution & UI Controls"
-input bool               InpExportOnInit        = true;                 // Auto-Export Immediately on Load
+input group ">>>> 5. Execution & UI Controls"
+input bool               InpExportOnInit        = true;                 // Auto-Export Immediately on Load (Live Chart)
 input bool               InpShowOnChartUI       = true;                 // Display On-Chart Control & Status HUD
 input bool               InpRemoveEAUponFinish  = false;                // Unload EA from Chart after Exporting
 
@@ -59,27 +79,56 @@ input bool               InpRemoveEAUponFinish  = false;                // Unloa
 #define HUD_STATUS_ID   "ZERITH_HUD_STATUS"
 #define HUD_INFO_ID     "ZERITH_HUD_INFO"
 
-bool   g_isExporting = false;
-int    g_totalExportedBars = 0;
-string g_lastExportStatus = "Ready";
+bool           g_isExporting = false;
+int            g_totalExportedBars = 0;
+string         g_lastExportStatus = "Ready";
+
+// Strategy Tester backtest buffer
+SCandleRecord  g_backtestBars[];
+int            g_backtestBarCount = 0;
+datetime       g_lastBarTime = 0;
+bool           g_isTester = false;
+
+//+------------------------------------------------------------------+
+//| HELPER: FORMAT DATE TO YYYYMMDD FOR FILENAMES                    |
+//+------------------------------------------------------------------+
+string FormatDateForFileName(const datetime dt)
+{
+   MqlDateTime mdt;
+   TimeToStruct(dt, mdt);
+   return StringFormat("%04d%02d%02d", mdt.year, mdt.mon, mdt.day);
+}
 
 //+------------------------------------------------------------------+
 //| EXPERT INITIALIZATION                                            |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   g_isTester = (bool)MQLInfoInteger(MQL_TESTER);
+
    Print("==================================================================");
-   PrintFormat("[Zerith ML Collector] Initializing on %s (%s)...", _Symbol, EnumToString(Period()));
+   PrintFormat("[Zerith ML Collector] Initializing on %s (%s) | Tester Mode: %s",
+               _Symbol, EnumToString(Period()), g_isTester ? "YES" : "NO");
 
-   if(InpShowOnChartUI)
+   if(g_isTester && InpAutoDetectTester)
    {
-      CreateOnChartUI();
+      // Prepare buffer for capturing Strategy Tester backtest bars
+      g_backtestBarCount = 0;
+      ArrayResize(g_backtestBars, 10000);
+      g_lastBarTime = 0;
+      Print("[Zerith ML Collector] Strategy Tester Mode Active: Will record bars from backtest period and save at completion.");
    }
-
-   if(InpExportOnInit)
+   else
    {
-      // Run batch export on first launch
-      EventSetTimer(1);
+      if(InpShowOnChartUI && !g_isTester)
+      {
+         CreateOnChartUI();
+      }
+
+      if(InpExportOnInit && !g_isTester)
+      {
+         EventSetTimer(1);
+      }
    }
 
    return INIT_SUCCEEDED;
@@ -91,17 +140,27 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   RemoveOnChartUI();
+
+   // If running in Strategy Tester, finalize and save the backtest dataset
+   if(g_isTester && InpAutoDetectTester && g_backtestBarCount > 0)
+   {
+      SaveBacktestDataset();
+   }
+
+   if(!g_isTester)
+   {
+      RemoveOnChartUI();
+   }
    Comment("");
 }
 
 //+------------------------------------------------------------------+
-//| TIMER HANDLER (FOR TRIGGERING ONINIT EXPORT SAFELY)              |
+//| TIMER HANDLER (LIVE CHART AUTO-EXPORT)                           |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
    EventKillTimer();
-   if(!g_isExporting)
+   if(!g_isExporting && !g_isTester)
    {
       ExecuteBatchExport();
       if(InpRemoveEAUponFinish)
@@ -113,11 +172,39 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| TICK HANDLER                                                     |
+//| TICK HANDLER (CAPTURES BARS AS STRATEGY TESTER BACKTEST PLAYS)   |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // No high-frequency per-tick calculation needed for batch collector
+   if(!g_isTester || !InpAutoDetectTester) return;
+
+   ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
+   datetime currentBarTime = iTime(_Symbol, tf, 0);
+
+   if(currentBarTime != g_lastBarTime)
+   {
+      if(g_lastBarTime != 0)
+      {
+         // Bar at index 1 has just closed and is complete
+         MqlRates closedRate[1];
+         if(CopyRates(_Symbol, tf, 1, 1, closedRate) > 0)
+         {
+            if(g_backtestBarCount >= ArraySize(g_backtestBars))
+               ArrayResize(g_backtestBars, g_backtestBarCount + 10000);
+
+            g_backtestBars[g_backtestBarCount].time        = closedRate[0].time;
+            g_backtestBars[g_backtestBarCount].open        = closedRate[0].open;
+            g_backtestBars[g_backtestBarCount].high        = closedRate[0].high;
+            g_backtestBars[g_backtestBarCount].low         = closedRate[0].low;
+            g_backtestBars[g_backtestBarCount].close       = closedRate[0].close;
+            g_backtestBars[g_backtestBarCount].tick_volume = closedRate[0].tick_volume;
+            g_backtestBars[g_backtestBarCount].spread      = closedRate[0].spread;
+            g_backtestBars[g_backtestBarCount].real_volume = closedRate[0].real_volume;
+            g_backtestBarCount++;
+         }
+      }
+      g_lastBarTime = currentBarTime;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -143,7 +230,148 @@ void OnChartEvent(const int id,
 }
 
 //+------------------------------------------------------------------+
-//| CORE BATCH EXPORT ORCHESTRATOR                                   |
+//| SAVE BACKTEST DATASET AT END OF STRATEGY TESTER RUN              |
+//+------------------------------------------------------------------+
+void SaveBacktestDataset()
+{
+   // Append the last bar (index 0) which was open when the backtest ended
+   ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
+   MqlRates lastRate[1];
+   if(CopyRates(_Symbol, tf, 0, 1, lastRate) > 0)
+   {
+      if(g_backtestBarCount >= ArraySize(g_backtestBars))
+         ArrayResize(g_backtestBars, g_backtestBarCount + 1);
+
+      g_backtestBars[g_backtestBarCount].time        = lastRate[0].time;
+      g_backtestBars[g_backtestBarCount].open        = lastRate[0].open;
+      g_backtestBars[g_backtestBarCount].high        = lastRate[0].high;
+      g_backtestBars[g_backtestBarCount].low         = lastRate[0].low;
+      g_backtestBars[g_backtestBarCount].close       = lastRate[0].close;
+      g_backtestBars[g_backtestBarCount].tick_volume = lastRate[0].tick_volume;
+      g_backtestBars[g_backtestBarCount].spread      = lastRate[0].spread;
+      g_backtestBars[g_backtestBarCount].real_volume = lastRate[0].real_volume;
+      g_backtestBarCount++;
+   }
+
+   datetime firstDate = g_backtestBars[0].time;
+   datetime lastDate  = g_backtestBars[g_backtestBarCount - 1].time;
+
+   string tfString = EnumToString(tf);
+   StringReplace(tfString, "PERIOD_", "");
+
+   string dateRangeStr = StringFormat("%s_to_%s", FormatDateForFileName(firstDate), FormatDateForFileName(lastDate));
+   string fileBaseName = StringFormat("%s_%s_%s.csv", _Symbol, tfString, dateRangeStr);
+
+   // Save file
+   WriteRecordsToFile(fileBaseName, _Symbol, g_backtestBars, g_backtestBarCount);
+
+   Print("==================================================================");
+   PrintFormat("🎉 [Zerith ML Collector] Strategy Tester Backtest Export Finished!");
+   PrintFormat("📊 Total Bars Saved: %d", g_backtestBarCount);
+   PrintFormat("📅 Backtest Period:  %s  -->  %s", TimeToString(firstDate), TimeToString(lastDate));
+   PrintFormat("📄 Filename:         %s", fileBaseName);
+   PrintFormat("📂 Tester Directory: MQL5/Files/%s/%s", InpSubfolder, fileBaseName);
+   if(InpSaveToCommonFolder)
+   {
+      PrintFormat("🌐 Common Directory: MetaQuotes/Terminal/Common/Files/%s/%s", InpSubfolder, fileBaseName);
+   }
+   Print("==================================================================");
+}
+
+//+------------------------------------------------------------------+
+//| WRITE ARRAY OF CANDLE RECORDS TO CSV FILE                        |
+//+------------------------------------------------------------------+
+bool WriteRecordsToFile(const string fileBaseName,
+                        const string symName,
+                        const SCandleRecord &records[],
+                        const int totalCount)
+{
+   if(totalCount <= 0) return false;
+
+   CSymbolInfo sym;
+   sym.Name(symName);
+   int digits = sym.Digits();
+
+   string folderPath = InpSubfolder;
+   StringTrimLeft(folderPath);
+   StringTrimRight(folderPath);
+
+   // 1. Write to standard local terminal / tester folder
+   if(folderPath != "") FolderCreate(folderPath);
+   string localPath = (folderPath != "") ? StringFormat("%s/%s", folderPath, fileBaseName) : fileBaseName;
+
+   int localHandle = FileOpen(localPath, FILE_WRITE | FILE_CSV | FILE_ANSI, InpDelimiter[0]);
+   if(localHandle == INVALID_HANDLE)
+   {
+      PrintFormat("[-] Failed to create local file: %s (Error: %d)", localPath, GetLastError());
+      return false;
+   }
+
+   // 2. Optional: Also write to Common directory
+   int commonHandle = INVALID_HANDLE;
+   if(InpSaveToCommonFolder)
+   {
+      if(folderPath != "") FolderCreate(folderPath, FILE_COMMON);
+      commonHandle = FileOpen(localPath, FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, InpDelimiter[0]);
+   }
+
+   // Prepare Header
+   if(InpIncludeHeader)
+   {
+      string header = "";
+      if(InpIncludeUnixTime) header += "timestamp" + InpDelimiter;
+      header += "datetime" + InpDelimiter;
+      if(InpSplitDateTime) header += "date" + InpDelimiter + "time" + InpDelimiter;
+      header += "symbol" + InpDelimiter;
+      header += "open" + InpDelimiter;
+      header += "high" + InpDelimiter;
+      header += "low" + InpDelimiter;
+      header += "close" + InpDelimiter;
+      header += "tick_volume" + InpDelimiter;
+      header += "spread" + InpDelimiter;
+      header += "real_volume";
+
+      FileWriteString(localHandle, header + "\n");
+      if(commonHandle != INVALID_HANDLE) FileWriteString(commonHandle, header + "\n");
+   }
+
+   // Write rows
+   for(int i = 0; i < totalCount; i++)
+   {
+      string row = "";
+      if(InpIncludeUnixTime) row += IntegerToString((long)records[i].time) + InpDelimiter;
+
+      string dtStr = TimeToString(records[i].time, TIME_DATE | TIME_SECONDS);
+      row += dtStr + InpDelimiter;
+
+      if(InpSplitDateTime)
+      {
+         string dStr = TimeToString(records[i].time, TIME_DATE);
+         string tStr = TimeToString(records[i].time, TIME_SECONDS);
+         row += dStr + InpDelimiter + tStr + InpDelimiter;
+      }
+
+      row += symName + InpDelimiter;
+      row += DoubleToString(records[i].open, digits) + InpDelimiter;
+      row += DoubleToString(records[i].high, digits) + InpDelimiter;
+      row += DoubleToString(records[i].low, digits) + InpDelimiter;
+      row += DoubleToString(records[i].close, digits) + InpDelimiter;
+      row += IntegerToString(records[i].tick_volume) + InpDelimiter;
+      row += IntegerToString(records[i].spread) + InpDelimiter;
+      row += IntegerToString(records[i].real_volume);
+
+      FileWriteString(localHandle, row + "\n");
+      if(commonHandle != INVALID_HANDLE) FileWriteString(commonHandle, row + "\n");
+   }
+
+   FileClose(localHandle);
+   if(commonHandle != INVALID_HANDLE) FileClose(commonHandle);
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| CORE BATCH EXPORT (FOR LIVE CHART MODE)                          |
 //+------------------------------------------------------------------+
 void ExecuteBatchExport()
 {
@@ -188,7 +416,7 @@ void ExecuteBatchExport()
       UpdateHUDStatus(StringFormat("Processing %s (%s)...", resolvedSymbol, tfString), C'0,176,255');
       ChartRedraw(0);
 
-      if(ExportCandleData(resolvedSymbol, rawSymbol, targetTF, tfString))
+      if(ExportLiveCandleData(resolvedSymbol, rawSymbol, targetTF, tfString))
       {
          successCount++;
       }
@@ -206,12 +434,12 @@ void ExecuteBatchExport()
 }
 
 //+------------------------------------------------------------------+
-//| EXPORT INDIVIDUAL SYMBOL DATA TO CSV                             |
+//| EXPORT INDIVIDUAL SYMBOL DATA IN LIVE CHART MODE                 |
 //+------------------------------------------------------------------+
-bool ExportCandleData(const string brokerSymbol,
-                      const string baseSymbol,
-                      const ENUM_TIMEFRAMES tf,
-                      const string tfStr)
+bool ExportLiveCandleData(const string brokerSymbol,
+                          const string baseSymbol,
+                          const ENUM_TIMEFRAMES tf,
+                          const string tfStr)
 {
    CSymbolInfo sym;
    if(!sym.Name(brokerSymbol))
@@ -223,7 +451,7 @@ bool ExportCandleData(const string brokerSymbol,
    sym.Select(true);
 
    MqlRates rates[];
-   ArraySetAsSeries(rates, false); // Chronological order (Oldest -> Newest)
+   ArraySetAsSeries(rates, false);
 
    int copied = 0;
    ResetLastError();
@@ -251,88 +479,34 @@ bool ExportCandleData(const string brokerSymbol,
       return false;
    }
 
-   // Prepare output directory
-   string folderPath = InpSubfolder;
-   StringTrimLeft(folderPath);
-   StringTrimRight(folderPath);
-   if(folderPath != "")
-   {
-      FolderCreate(folderPath);
-   }
+   // Format filename with actual date range
+   datetime actualStart = rates[0].time;
+   datetime actualEnd   = rates[copied - 1].time;
+   string dateRangeStr  = StringFormat("%s_to_%s", FormatDateForFileName(actualStart), FormatDateForFileName(actualEnd));
+   string fileBaseName  = StringFormat("%s_%s_%s.csv", baseSymbol, tfStr, dateRangeStr);
 
-   // Format filename: e.g. "ML_Dataset/XAUUSD_H1_raw.csv"
-   string fileName = "";
-   if(folderPath != "")
-      fileName = StringFormat("%s/%s_%s_raw.csv", folderPath, baseSymbol, tfStr);
-   else
-      fileName = StringFormat("%s_%s_raw.csv", baseSymbol, tfStr);
-
-   int fileHandle = FileOpen(fileName, FILE_WRITE | FILE_CSV | FILE_ANSI, InpDelimiter[0]);
-   if(fileHandle == INVALID_HANDLE)
-   {
-      PrintFormat("[-] Failed to create output file: %s (Error: %d)", fileName, GetLastError());
-      return false;
-   }
-
-   // Write CSV Header
-   if(InpIncludeHeader)
-   {
-      string header = "";
-      if(InpIncludeUnixTime) header += "timestamp" + InpDelimiter;
-      header += "datetime" + InpDelimiter;
-      if(InpSplitDateTime) header += "date" + InpDelimiter + "time" + InpDelimiter;
-      header += "symbol" + InpDelimiter;
-      header += "open" + InpDelimiter;
-      header += "high" + InpDelimiter;
-      header += "low" + InpDelimiter;
-      header += "close" + InpDelimiter;
-      header += "tick_volume" + InpDelimiter;
-      header += "spread" + InpDelimiter;
-      header += "real_volume";
-
-      FileWriteString(fileHandle, header + "\n");
-   }
-
-   int digits = sym.Digits();
-
-   // Write Raw Candlestick Data Rows
+   SCandleRecord records[];
+   ArrayResize(records, copied);
    for(int i = 0; i < copied; i++)
    {
-      string row = "";
-
-      if(InpIncludeUnixTime)
-      {
-         row += IntegerToString((long)rates[i].time) + InpDelimiter;
-      }
-
-      string dtStr = TimeToString(rates[i].time, TIME_DATE | TIME_SECONDS);
-      row += dtStr + InpDelimiter;
-
-      if(InpSplitDateTime)
-      {
-         string dStr = TimeToString(rates[i].time, TIME_DATE);
-         string tStr = TimeToString(rates[i].time, TIME_SECONDS);
-         row += dStr + InpDelimiter + tStr + InpDelimiter;
-      }
-
-      row += baseSymbol + InpDelimiter;
-      row += DoubleToString(rates[i].open, digits) + InpDelimiter;
-      row += DoubleToString(rates[i].high, digits) + InpDelimiter;
-      row += DoubleToString(rates[i].low, digits) + InpDelimiter;
-      row += DoubleToString(rates[i].close, digits) + InpDelimiter;
-      row += IntegerToString(rates[i].tick_volume) + InpDelimiter;
-      row += IntegerToString(rates[i].spread) + InpDelimiter;
-      row += IntegerToString(rates[i].real_volume);
-
-      FileWriteString(fileHandle, row + "\n");
+      records[i].time        = rates[i].time;
+      records[i].open        = rates[i].open;
+      records[i].high        = rates[i].high;
+      records[i].low         = rates[i].low;
+      records[i].close       = rates[i].close;
+      records[i].tick_volume = rates[i].tick_volume;
+      records[i].spread      = rates[i].spread;
+      records[i].real_volume = rates[i].real_volume;
    }
 
-   FileClose(fileHandle);
-   g_totalExportedBars += copied;
-
-   PrintFormat("[+] Successfully exported %s (%s): %d bars saved -> %s",
-               brokerSymbol, tfStr, copied, fileName);
-   return true;
+   bool ok = WriteRecordsToFile(fileBaseName, baseSymbol, records, copied);
+   if(ok)
+   {
+      g_totalExportedBars += copied;
+      PrintFormat("[+] Successfully exported %s (%s): %d bars saved -> %s",
+                  brokerSymbol, tfStr, copied, fileBaseName);
+   }
+   return ok;
 }
 
 //+------------------------------------------------------------------+

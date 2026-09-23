@@ -59,7 +59,7 @@ A collection of algorithmic trading Expert Advisors (EAs), Scripts, and paramete
 ### Expert Advisors (Zerith Series)
 | File | Strategy / Target Asset | Description |
 | :--- | :--- | :--- |
-| [`Experts/Zerith_ML_CandleData_Exporter_EA.mq5`](Experts/Zerith_ML_CandleData_Exporter_EA.mq5) | Machine Learning Data Pipeline / Multi-Asset | Raw Candlestick (OHLCV + Spread + Real Volume) Historical & On-Demand Batch Exporter to CSV with Unix Timestamps |
+| [`Experts/Zerith_ML_CandleData_Exporter_EA.mq5`](Experts/Zerith_ML_CandleData_Exporter_EA.mq5) | Machine Learning Data Pipeline / Multi-Asset | Raw Candlestick (OHLCV + Spread + Real Volume) Historical & Strategy Tester Backtest Exporter to CSV with Dynamic Date-Range Naming (`<Symbol>_<TF>_<Start>_to_<End>.csv`) |
 | [`Experts/Zerith_Gold_MultiZone_Breakout_EA.mq5`](Experts/Zerith_Gold_MultiZone_Breakout_EA.mq5) | Multi-Zone Structural Swing Breakout / XAUUSD | 6 Autonomous H1 Market Structure Breakout Modules with Dynamic Daily Price Scaling, Multi-Tier BE/Trailing & Prop DD Guard |
 | [`Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5`](Experts/Zerith_SBR_Liquidity_Sweep_EA.mq5) | Smart Money Concepts (SMC) / Gold & FX | Multi-Timeframe SBR/RBS Flip Zones with LTF Liquidity Sweep & Classic A/V Reversal Trigger |
 | [`Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5`](Experts/Zerith_News_Straddle_ReverseTrailing_EA.mq5) | High-Impact News Straddle / Gold & FX | News Straddle Breakout EA with Opposite Stop Order Trailing SL, Automated Reversal Flip, and Capital Protection |
